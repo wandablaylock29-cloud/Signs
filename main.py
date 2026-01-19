@@ -2,6 +2,7 @@
 """
 Python Hosting Telegram Bot
 Compatible with python-telegram-bot v21.0+
+Runs scripts indefinitely until stopped or bot restarts
 """
 
 import logging
@@ -9,13 +10,14 @@ import asyncio
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+import signal
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8036843497:AAFK2IEsmxjFZW_2TEvuXtGEvSdKLU3k6Z0"
+BOT_TOKEN = "7897881067:AAGtctSuNLfu14sKGaaVmHUV4Nvz935nENc"
 
 # Store running processes: user_id -> info
 running_processes: dict[int, dict] = {}
@@ -52,7 +54,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "📊 *Bot Status*\n"
         f"• Running scripts: {total_scripts}\n"
         "• Bot: Online ✅\n"
-        "• Scripts stop if bot restarts"
+        "• Scripts run indefinitely until stopped"
     )
     await update.message.reply_text(status, parse_mode="Markdown")
 
@@ -146,12 +148,15 @@ async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ================= SCRIPT RUNNER =================
 
 async def run_script(update: Update, user_id: int, file_path: Path) -> None:
-    """Run the Python script and send output."""
+    """Run the Python script and send output - NO TIME LIMIT."""
     process = None
+    output_chunks: List[str] = []
+    error_chunks: List[str] = []
+    
     try:
-        # Create subprocess
+        # Create subprocess with unbuffered output
         process = await asyncio.create_subprocess_exec(
-            sys.executable, str(file_path),
+            sys.executable, "-u", str(file_path),  # -u for unbuffered output
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -163,33 +168,49 @@ async def run_script(update: Update, user_id: int, file_path: Path) -> None:
         }
 
         await update.message.reply_text(
-            f"▶️ Script started: `{file_path.name}`",
+            f"▶️ Script started: `{file_path.name}`\n"
+            "⏳ Running indefinitely until stopped with /stop",
             parse_mode="Markdown",
         )
 
-        # Get output with timeout (30 seconds max for script execution)
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=30
-            )
-        except asyncio.TimeoutError:
-            if process and process.returncode is None:
-                process.kill()
-                await process.wait()
-            await update.message.reply_text("⏰ Script timed out after 30 seconds")
-            stdout, stderr = b'', b''
-        except Exception as e:
-            logger.error(f"Error during script execution: {e}")
-            stdout, stderr = b'', b''
+        # Function to read stream
+        async def read_stream(stream, is_stderr=False):
+            """Read from stream and collect output."""
+            chunks = []
+            try:
+                while True:
+                    line_bytes = await stream.readline()
+                    if not line_bytes:
+                        break
+                    line = line_bytes.decode('utf-8', errors='ignore').rstrip()
+                    if line:
+                        chunks.append(line)
+            except Exception as e:
+                logger.error(f"Error reading {'stderr' if is_stderr else 'stdout'}: {e}")
+            return chunks
 
-        # Send output
-        if stdout:
-            output_text = stdout.decode('utf-8', errors='ignore').strip()
+        # Create tasks for reading stdout and stderr
+        stdout_task = asyncio.create_task(read_stream(process.stdout, False))
+        stderr_task = asyncio.create_task(read_stream(process.stderr, True))
+        
+        # Wait for process to complete or be stopped
+        try:
+            # Wait for process to complete
+            await process.wait()
+        except Exception as e:
+            logger.error(f"Error waiting for process: {e}")
+        
+        # Get collected output
+        output_chunks = await stdout_task
+        error_chunks = await stderr_task
+        
+        # Send collected output
+        if output_chunks:
+            output_text = "\n".join(output_chunks)
             if output_text:
                 if len(output_text) > 3500:
                     chunks = [output_text[i:i+3500] for i in range(0, len(output_text), 3500)]
-                    for i, chunk in enumerate(chunks[:3]):
+                    for i, chunk in enumerate(chunks[:5]):  # Limit to 5 chunks
                         await update.message.reply_text(
                             f"📤 Output (Part {i+1}):\n```\n{chunk}\n```",
                             parse_mode="Markdown",
@@ -200,12 +221,12 @@ async def run_script(update: Update, user_id: int, file_path: Path) -> None:
                         parse_mode="Markdown",
                     )
 
-        if stderr:
-            error_text = stderr.decode('utf-8', errors='ignore').strip()
+        if error_chunks:
+            error_text = "\n".join(error_chunks)
             if error_text:
                 if len(error_text) > 3500:
                     chunks = [error_text[i:i+3500] for i in range(0, len(error_text), 3500)]
-                    for i, chunk in enumerate(chunks[:3]):
+                    for i, chunk in enumerate(chunks[:5]):  # Limit to 5 chunks
                         await update.message.reply_text(
                             f"⚠️ Errors (Part {i+1}):\n```\n{chunk}\n```",
                             parse_mode="Markdown",
@@ -216,8 +237,11 @@ async def run_script(update: Update, user_id: int, file_path: Path) -> None:
                         parse_mode="Markdown",
                     )
 
+        # Check exit code
         if process and process.returncode == 0:
             await update.message.reply_text("✅ Script completed successfully")
+        elif process and process.returncode != 0:
+            await update.message.reply_text(f"❌ Script exited with code: {process.returncode}")
 
     except Exception as e:
         logger.error(f"Runtime error: {e}")
@@ -245,6 +269,21 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         pass
 
 
+# ================= CLEANUP ON EXIT =================
+
+def cleanup_all_processes():
+    """Clean up all running processes on exit."""
+    logger.info("Cleaning up all processes...")
+    for user_id, info in list(running_processes.items()):
+        process = info.get("process")
+        if process and process.returncode is None:
+            try:
+                process.kill()
+            except:
+                pass
+    running_processes.clear()
+
+
 # ================= MAIN =================
 
 def main() -> None:
@@ -255,6 +294,7 @@ def main() -> None:
     print("🤖 Starting Python Hosting Bot...")
     print(f"📱 Bot Token: {BOT_TOKEN[:10]}...")
     print("📦 Using python-telegram-bot v21+")
+    print("⏳ Scripts run indefinitely until stopped")
     
     try:
         # Create application
@@ -275,11 +315,16 @@ def main() -> None:
         print("📝 Send /start to your bot on Telegram")
         print("🔄 Bot is running...")
         
+        # Set up cleanup on exit
+        import atexit
+        atexit.register(cleanup_all_processes)
+        
         # Run the bot
         application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
         print(f"❌ Fatal error: {type(e).__name__}: {e}")
+        cleanup_all_processes()
         return 1
     
     return 0
