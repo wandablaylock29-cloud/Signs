@@ -38,7 +38,7 @@ from telegram.constants import ParseMode
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration
-BOT_TOKEN = "8036843497:AAEYm0ZVVEXVQZISeKVHS5pj6CgKfzMtXqY"
+BOT_TOKEN = "8036843497:AAGdb6e15p_yWDvfp9cbqplRfQiQH3b3Jzo"
 OWNER_ID = 6821529235
 API_BASE_URL = "http://140.99.254.73:3000/checkout"
 
