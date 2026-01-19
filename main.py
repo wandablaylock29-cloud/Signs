@@ -36,7 +36,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ========== CONFIGURATION ==========
 # IMPORTANT: This token MUST match what you created with BotFather
-BOT_TOKEN = "7417431428:AAGPGtAOtcnQmJbOlAv_y6-sMHGC03bM52k"
+BOT_TOKEN = "8504531890:AAHYyTIDSipGmJTiY-7UV7Vk-UFtWOLYddM"
 OWNER_ID = 6821529235
 API_BASE_URL = "http://140.99.254.73:3000/checkout"
 
