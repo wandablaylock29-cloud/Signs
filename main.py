@@ -39,7 +39,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ========== CONFIGURATION ==========
 BOT_TOKEN = "8504531890:AAEn6cnVTMZAOQyjkQ9uilaXsW2-jUaFTeQ"
 OWNER_ID = 6821529235
-API_BASE_URL = "http://140.99.254.73:3000/checkout"
+API_BASE_URL = "https://signs2.onrender.com/autog"
 
 # Bot settings
 MAX_PROXIES = 20
