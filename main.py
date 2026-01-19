@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-Simple Telegram Python Hosting Bot
-Working with bot token: 8036843497:AAFscbpINVEMGt5GaOHnJ0deVcCASGqZe98
-Compatible with python-telegram-bot v21+
+Python Hosting Telegram Bot
+Compatible with python-telegram-bot v21.0+
 """
 
 import logging
 import asyncio
 import sys
-import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -32,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 # ================= COMMANDS =================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a welcome message when /start is issued."""
     welcome = (
         "🤖 *Python File Hosting Bot*\n\n"
         "Send me a `.py` file and I'll run it for you!\n\n"
@@ -46,7 +45,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome, parse_mode="Markdown")
 
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send bot status."""
     total_scripts = len(running_processes)
     status = (
         "📊 *Bot Status*\n"
@@ -57,7 +57,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(status, parse_mode="Markdown")
 
 
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all running scripts."""
     if not running_processes:
         await update.message.reply_text("📭 No scripts are currently running.")
         return
@@ -71,7 +72,8 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, parse_mode="Markdown")
 
 
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop the user's running script."""
     user_id = update.effective_user.id
 
     info = running_processes.get(user_id)
@@ -87,10 +89,13 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await asyncio.wait_for(process.wait(), timeout=5)
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+                if process.returncode is None:  # Process still running
+                    process.kill()
+                    await process.wait()
+            except Exception as e:
+                logger.error(f"Error stopping process: {e}")
         except Exception as e:
-            logger.error(f"Error stopping process: {e}")
+            logger.error(f"Error in process termination: {e}")
 
     running_processes.pop(user_id, None)
     await update.message.reply_text(f"🛑 Stopped: `{info['filename']}`", parse_mode="Markdown")
@@ -98,7 +103,8 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= FILE HANDLER =================
 
-async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming Python files."""
     try:
         user_id = update.effective_user.id
 
@@ -107,6 +113,11 @@ async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
 
         document = update.message.document
+        
+        if not document.file_name.endswith('.py'):
+            await update.message.reply_text("❌ Please send a .py file")
+            return
+
         tg_file = await document.get_file()
 
         # Safe filename
@@ -128,15 +139,17 @@ async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
         asyncio.create_task(run_script(update, user_id, file_path))
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
         logger.error(f"Error handling file: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)[:500]}")
 
 
 # ================= SCRIPT RUNNER =================
 
-async def run_script(update: Update, user_id: int, file_path: Path):
+async def run_script(update: Update, user_id: int, file_path: Path) -> None:
+    """Run the Python script and send output."""
     process = None
     try:
+        # Create subprocess
         process = await asyncio.create_subprocess_exec(
             sys.executable, str(file_path),
             stdout=asyncio.subprocess.PIPE,
@@ -154,16 +167,29 @@ async def run_script(update: Update, user_id: int, file_path: Path):
             parse_mode="Markdown",
         )
 
-        # Get output
-        stdout, stderr = await process.communicate()
+        # Get output with timeout (30 seconds max for script execution)
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=30
+            )
+        except asyncio.TimeoutError:
+            if process and process.returncode is None:
+                process.kill()
+                await process.wait()
+            await update.message.reply_text("⏰ Script timed out after 30 seconds")
+            stdout, stderr = b'', b''
+        except Exception as e:
+            logger.error(f"Error during script execution: {e}")
+            stdout, stderr = b'', b''
 
+        # Send output
         if stdout:
-            output_text = stdout.decode('utf-8', errors='ignore')
-            if output_text.strip():
-                # Split long output into multiple messages if needed
+            output_text = stdout.decode('utf-8', errors='ignore').strip()
+            if output_text:
                 if len(output_text) > 3500:
                     chunks = [output_text[i:i+3500] for i in range(0, len(output_text), 3500)]
-                    for i, chunk in enumerate(chunks[:3]):  # Limit to 3 chunks
+                    for i, chunk in enumerate(chunks[:3]):
                         await update.message.reply_text(
                             f"📤 Output (Part {i+1}):\n```\n{chunk}\n```",
                             parse_mode="Markdown",
@@ -175,8 +201,8 @@ async def run_script(update: Update, user_id: int, file_path: Path):
                     )
 
         if stderr:
-            error_text = stderr.decode('utf-8', errors='ignore')
-            if error_text.strip():
+            error_text = stderr.decode('utf-8', errors='ignore').strip()
+            if error_text:
                 if len(error_text) > 3500:
                     chunks = [error_text[i:i+3500] for i in range(0, len(error_text), 3500)]
                     for i, chunk in enumerate(chunks[:3]):
@@ -190,9 +216,15 @@ async def run_script(update: Update, user_id: int, file_path: Path):
                         parse_mode="Markdown",
                     )
 
+        if process and process.returncode == 0:
+            await update.message.reply_text("✅ Script completed successfully")
+
     except Exception as e:
         logger.error(f"Runtime error: {e}")
-        await update.message.reply_text(f"❌ Runtime error: {str(e)[:1000]}")
+        try:
+            await update.message.reply_text(f"❌ Runtime error: {str(e)[:500]}")
+        except:
+            pass
 
     finally:
         if user_id in running_processes:
@@ -201,25 +233,31 @@ async def run_script(update: Update, user_id: int, file_path: Path):
 
 # ================= ERROR HANDLER =================
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Log errors"""
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors."""
     logger.error(f"Update {update} caused error {context.error}")
-    if update and update.message:
-        await update.message.reply_text("❌ An error occurred. Please try again.")
+    
+    # Try to send error message to user
+    try:
+        if update and update.message:
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+    except:
+        pass
 
 
 # ================= MAIN =================
 
-async def main():
-    """Main async function for python-telegram-bot v21+"""
+def main() -> None:
+    """Start the bot."""
     # Create necessary directories
     Path("scripts").mkdir(exist_ok=True)
     
     print("🤖 Starting Python Hosting Bot...")
     print(f"📱 Bot Token: {BOT_TOKEN[:10]}...")
+    print("📦 Using python-telegram-bot v21+")
     
     try:
-        # Create application with the bot token
+        # Create application
         application = Application.builder().token(BOT_TOKEN).build()
 
         # Add handlers
@@ -235,22 +273,18 @@ async def main():
         print("✅ Bot initialized successfully!")
         print("🚀 Starting polling...")
         print("📝 Send /start to your bot on Telegram")
+        print("🔄 Bot is running...")
         
-        # Start polling
-        await application.run_polling()
+        # Run the bot
+        application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
-        print(f"❌ Error starting bot: {e}")
-        print("Possible issues:")
-        print("1. Invalid bot token")
-        print("2. Network connection issue")
-        print("3. python-telegram-bot version mismatch")
-        print(f"Error details: {type(e).__name__}: {e}")
+        print(f"❌ Fatal error: {type(e).__name__}: {e}")
         return 1
     
     return 0
 
 
 if __name__ == "__main__":
-    # Run the async main function
-    asyncio.run(main())
+    # Run the bot
+    sys.exit(main())
