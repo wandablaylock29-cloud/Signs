@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple Telegram Python Hosting Bot
+Simple Telegram Python Hosting Bot - Compatible with python-telegram-bot v20.7
 """
 
 import logging
@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 # ========== CONFIG ==========
 BOT_TOKEN = "8036843497:AAHJ7gznTcwJto3iMAOooI7dzZmzQHNJW3M"  # <-- PUT TOKEN HERE
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # ================= COMMANDS =================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     welcome = (
         "🤖 *Python File Hosting Bot*\n\n"
         "Send me a `.py` file and I'll run it for you!\n\n"
@@ -39,10 +39,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/status - Check bot status\n\n"
         "*Note:* Scripts run until finished or stopped."
     )
-    await update.message.reply_text(welcome, parse_mode="Markdown")
+    update.message.reply_text(welcome, parse_mode="Markdown")
 
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def status_command(update: Update, context: CallbackContext):
     total_scripts = len(running_processes)
     status = (
         "📊 *Bot Status*\n"
@@ -50,12 +50,12 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Bot: Online ✅\n"
         "• Scripts stop if bot restarts"
     )
-    await update.message.reply_text(status, parse_mode="Markdown")
+    update.message.reply_text(status, parse_mode="Markdown")
 
 
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def list_command(update: Update, context: CallbackContext):
     if not running_processes:
-        await update.message.reply_text("📭 No scripts are currently running.")
+        update.message.reply_text("📭 No scripts are currently running.")
         return
 
     message = "📋 *Running Scripts:*\n\n"
@@ -64,44 +64,44 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_time = info["start_time"].strftime("%H:%M:%S")
         message += f"• `{filename}` (Started: {start_time})\n"
 
-    await update.message.reply_text(message, parse_mode="Markdown")
+    update.message.reply_text(message, parse_mode="Markdown")
 
 
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def stop_command(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
 
     info = running_processes.get(user_id)
     if not info:
-        await update.message.reply_text("❌ No script is currently running.")
+        update.message.reply_text("❌ No script is currently running.")
         return
 
-    process: asyncio.subprocess.Process = info["process"]
-
+    process = info["process"]
+    
     try:
         process.terminate()
-        await asyncio.wait_for(process.wait(), timeout=5)
-    except Exception:
+        process.wait(timeout=5)
+    except:
         try:
             process.kill()
-        except Exception:
+        except:
             pass
 
     running_processes.pop(user_id, None)
-    await update.message.reply_text(f"🛑 Stopped: `{info['filename']}`", parse_mode="Markdown")
+    update.message.reply_text(f"🛑 Stopped: `{info['filename']}`", parse_mode="Markdown")
 
 
 # ================= FILE HANDLER =================
 
-async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_python_file(update: Update, context: CallbackContext):
     try:
         user_id = update.effective_user.id
 
         if user_id in running_processes:
-            await update.message.reply_text("⚠️ Stop your current script first using /stop")
+            update.message.reply_text("⚠️ Stop your current script first using /stop")
             return
 
         document = update.message.document
-        tg_file = await document.get_file()
+        tg_file = document.get_file()
 
         # Safe filename
         filename = Path(document.file_name).name
@@ -111,17 +111,18 @@ async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         file_path = user_dir / filename
 
-        await tg_file.download_to_drive(file_path)
+        tg_file.download(str(file_path))
 
-        await update.message.reply_text(
+        update.message.reply_text(
             f"✅ File saved: `{filename}`\n🚀 Running your script...",
             parse_mode="Markdown",
         )
 
-        asyncio.create_task(run_script(update, user_id, file_path))
+        # Run script in background
+        asyncio.run(run_script(update, user_id, file_path))
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        update.message.reply_text(f"❌ Error: {e}")
 
 
 # ================= SCRIPT RUNNER =================
@@ -140,46 +141,28 @@ async def run_script(update: Update, user_id: int, file_path: Path):
             "start_time": datetime.now(),
         }
 
-        await update.message.reply_text(
+        update.message.reply_text(
             f"▶️ Script started: `{file_path.name}`",
             parse_mode="Markdown",
         )
 
-        # Stream output live
-        async def read_stream(stream, label):
-            lines = []
-            while True:
-                line = await stream.readline()
-                if not line:
-                    break
-                text = line.decode(errors="ignore")
-                lines.append(text)
-                if len("".join(lines)) > 3500:
-                    break
-            return "".join(lines)
+        # Get output
+        stdout, stderr = await process.communicate()
 
-        stdout_task = asyncio.create_task(read_stream(process.stdout, "out"))
-        stderr_task = asyncio.create_task(read_stream(process.stderr, "err"))
-
-        await process.wait()
-
-        stdout = await stdout_task
-        stderr = await stderr_task
-
-        if stdout.strip():
-            await update.message.reply_text(
-                f"📤 Output:\n```\n{stdout[-3500:]}\n```",
+        if stdout:
+            update.message.reply_text(
+                f"📤 Output:\n```\n{stdout.decode()[:3500]}\n```",
                 parse_mode="Markdown",
             )
 
-        if stderr.strip():
-            await update.message.reply_text(
-                f"⚠️ Errors:\n```\n{stderr[-3500:]}\n```",
+        if stderr:
+            update.message.reply_text(
+                f"⚠️ Errors:\n```\n{stderr.decode()[:3500]}\n```",
                 parse_mode="Markdown",
             )
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Runtime error: {e}")
+        update.message.reply_text(f"❌ Runtime error: {e}")
 
     finally:
         running_processes.pop(user_id, None)
@@ -194,25 +177,22 @@ def main():
 
     Path("scripts").mkdir(exist_ok=True)
 
-    try:
-        application = Application.builder().token(BOT_TOKEN).build()
+    # Create updater and dispatcher
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
 
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("stop", stop_command))
-        application.add_handler(CommandHandler("list", list_command))
-        application.add_handler(CommandHandler("status", status_command))
-        application.add_handler(MessageHandler(filters.Document.FileExtension("py"), handle_python_file))
+    # Add handlers
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("stop", stop_command))
+    dispatcher.add_handler(CommandHandler("list", list_command))
+    dispatcher.add_handler(CommandHandler("status", status_command))
+    dispatcher.add_handler(MessageHandler(Filters.document.file_extension("py"), handle_python_file))
 
-        print("🤖 Bot started")
-        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-        
-    except AttributeError as e:
-        print(f"❌ Library version issue: {e}")
-        print("\n🔥 FIX: Install compatible python-telegram-bot version:")
-        print("Run: pip install python-telegram-bot==20.7")
-        print("Or: pip install python-telegram-bot --upgrade")
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    print("🤖 Bot started")
+    
+    # Start polling
+    updater.start_polling()
+    updater.idle()
 
 
 if __name__ == "__main__":
