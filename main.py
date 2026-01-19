@@ -194,16 +194,25 @@ def main():
 
     Path("scripts").mkdir(exist_ok=True)
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    try:
+        application = Application.builder().token(BOT_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stop", stop_command))
-    application.add_handler(CommandHandler("list", list_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(MessageHandler(filters.Document.FileExtension("py"), handle_python_file))
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("stop", stop_command))
+        application.add_handler(CommandHandler("list", list_command))
+        application.add_handler(CommandHandler("status", status_command))
+        application.add_handler(MessageHandler(filters.Document.FileExtension("py"), handle_python_file))
 
-    print("🤖 Bot started")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+        print("🤖 Bot started")
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        
+    except AttributeError as e:
+        print(f"❌ Library version issue: {e}")
+        print("\n🔥 FIX: Install compatible python-telegram-bot version:")
+        print("Run: pip install python-telegram-bot==20.7")
+        print("Or: pip install python-telegram-bot --upgrade")
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
