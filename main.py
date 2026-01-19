@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple Telegram Python Hosting Bot - Compatible with python-telegram-bot v20.7
+Simple Telegram Python Hosting Bot - Fixed imports for v20+
 """
 
 import logging
@@ -10,10 +10,10 @@ from pathlib import Path
 from datetime import datetime
 
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters, CallbackContext
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8036843497:AAHJ7gznTcwJto3iMAOooI7dzZmzQHNJW3M"  # <-- PUT TOKEN HERE
+BOT_TOKEN = "8036843497:AAHJ7gznTcwJto3iMAOooI7dzZmzQHNJW3M"  # <-- PUT TOKEN HERE (GET FROM @BotFather)
 
 # Store running processes: user_id -> info
 running_processes: dict[int, dict] = {}
@@ -150,16 +150,20 @@ async def run_script(update: Update, user_id: int, file_path: Path):
         stdout, stderr = await process.communicate()
 
         if stdout:
-            update.message.reply_text(
-                f"📤 Output:\n```\n{stdout.decode()[:3500]}\n```",
-                parse_mode="Markdown",
-            )
+            output_text = stdout.decode('utf-8', errors='ignore')
+            if output_text.strip():
+                update.message.reply_text(
+                    f"📤 Output:\n```\n{output_text[:3500]}\n```",
+                    parse_mode="Markdown",
+                )
 
         if stderr:
-            update.message.reply_text(
-                f"⚠️ Errors:\n```\n{stderr.decode()[:3500]}\n```",
-                parse_mode="Markdown",
-            )
+            error_text = stderr.decode('utf-8', errors='ignore')
+            if error_text.strip():
+                update.message.reply_text(
+                    f"⚠️ Errors:\n```\n{error_text[:3500]}\n```",
+                    parse_mode="Markdown",
+                )
 
     except Exception as e:
         update.message.reply_text(f"❌ Runtime error: {e}")
@@ -173,26 +177,35 @@ async def run_script(update: Update, user_id: int, file_path: Path):
 def main():
     if BOT_TOKEN == "PASTE_YOUR_BOT_TOKEN_HERE":
         print("❌ ERROR: Set your bot token in BOT_TOKEN")
+        print("Get your token from @BotFather on Telegram")
+        print("Then replace 'PASTE_YOUR_BOT_TOKEN_HERE' with your actual token")
         return
 
     Path("scripts").mkdir(exist_ok=True)
 
-    # Create updater and dispatcher
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
+    try:
+        # Create updater and dispatcher
+        updater = Updater(BOT_TOKEN, use_context=True)
+        dispatcher = updater.dispatcher
 
-    # Add handlers
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("stop", stop_command))
-    dispatcher.add_handler(CommandHandler("list", list_command))
-    dispatcher.add_handler(CommandHandler("status", status_command))
-    dispatcher.add_handler(MessageHandler(Filters.document.file_extension("py"), handle_python_file))
+        # Add handlers
+        dispatcher.add_handler(CommandHandler("start", start))
+        dispatcher.add_handler(CommandHandler("stop", stop_command))
+        dispatcher.add_handler(CommandHandler("list", list_command))
+        dispatcher.add_handler(CommandHandler("status", status_command))
+        dispatcher.add_handler(MessageHandler(filters.Document.FileExtension("py"), handle_python_file))
 
-    print("🤖 Bot started")
-    
-    # Start polling
-    updater.start_polling()
-    updater.idle()
+        print("🤖 Bot started successfully!")
+        print("✅ Your bot is now live on Render!")
+        print("📱 Go to Telegram and send /start to your bot")
+        
+        # Start polling
+        updater.start_polling()
+        updater.idle()
+        
+    except Exception as e:
+        print(f"❌ Error starting bot: {e}")
+        print("Make sure your BOT_TOKEN is correct!")
 
 
 if __name__ == "__main__":
