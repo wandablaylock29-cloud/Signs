@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Simple Telegram Python Hosting Bot
-Run Python files from Telegram
+Simple Telegram Python Hosting Bot - Compatible with older python-telegram-bot
 """
 
 import os
 import logging
-import asyncio
 from pathlib import Path
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from datetime import datetime
+import subprocess
+import threading
+import signal
 
-# Bot token (replace with your actual token)
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+
+# Bot token
 BOT_TOKEN = "8036843497:AAHJ7gznTcwJto3iMAOooI7dzZmzQHNJW3M"
 
 # Store running processes
@@ -24,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     """Send welcome message"""
     welcome = """
 🤖 *Python File Hosting Bot*
@@ -39,12 +42,12 @@ Send me a `.py` Python file and I'll run it for you!
 
 *Note:* Scripts will run until the bot is stopped.
     """
-    await update.message.reply_text(welcome, parse_mode="Markdown")
+    update.message.reply_text(welcome, parse_mode="Markdown")
 
-async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_python_file(update: Update, context: CallbackContext):
     """Handle incoming Python files"""
     # Get the file
-    file = await update.message.document.get_file()
+    file = update.message.document.get_file()
     
     # Create user directory
     user_id = update.effective_user.id
@@ -56,24 +59,27 @@ async def handle_python_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
     file_path = user_dir / filename
     
     # Download file
-    await file.download_to_drive(file_path)
+    file.download(str(file_path))
     
     # Make it executable
     file_path.chmod(0o755)
     
-    await update.message.reply_text(f"✅ File saved: `{filename}`\nRunning your script...", parse_mode="Markdown")
+    update.message.reply_text(f"✅ File saved: `{filename}`\nRunning your script...", parse_mode="Markdown")
     
-    # Run the script in background
-    await run_script(update, context, user_id, file_path)
+    # Run the script in background thread
+    thread = threading.Thread(target=run_script, args=(update, context, user_id, file_path))
+    thread.daemon = True
+    thread.start()
 
-async def run_script(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, file_path: Path):
+def run_script(update: Update, context: CallbackContext, user_id: int, file_path: Path):
     """Run Python script in background"""
     try:
         # Start the process
-        process = await asyncio.create_subprocess_exec(
-            "python3", str(file_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        process = subprocess.Popen(
+            ["python3", str(file_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
         
         # Store the process
@@ -85,42 +91,41 @@ async def run_script(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id
         }
         
         # Send confirmation
-        await update.message.reply_text(f"🚀 Script is now running!\nFile: `{file_path.name}`", parse_mode="Markdown")
+        context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"🚀 Script is now running!\nFile: `{file_path.name}`",
+            parse_mode="Markdown"
+        )
         
-        # Monitor output
-        asyncio.create_task(monitor_output(update, context, user_id, process))
+        # Get output
+        stdout, stderr = process.communicate()
         
+        # Send output
+        if stdout and stdout.strip():
+            context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"📤 Output:\n```\n{stdout[:4000]}\n```",
+                parse_mode="Markdown"
+            )
+        
+        if stderr and stderr.strip():
+            context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"⚠️ Errors:\n```\n{stderr[:4000]}\n```",
+                parse_mode="Markdown"
+            )
+        
+        # Remove from running processes if it finished
+        if user_id in running_processes:
+            del running_processes[user_id]
+            
     except Exception as e:
-        await update.message.reply_text(f"❌ Error running script: {str(e)}")
+        context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"❌ Error: {str(e)}"
+        )
 
-async def monitor_output(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, process):
-    """Monitor script output"""
-    try:
-        # Read stdout and stderr
-        stdout, stderr = await process.communicate()
-        
-        if stdout:
-            output = stdout.decode('utf-8', errors='ignore')[:4000]  # Limit length
-            if output.strip():
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"📤 Output from your script:\n```\n{output}\n```",
-                    parse_mode="Markdown"
-                )
-        
-        if stderr:
-            error = stderr.decode('utf-8', errors='ignore')[:4000]
-            if error.strip():
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"⚠️ Errors from your script:\n```\n{error}\n```",
-                    parse_mode="Markdown"
-                )
-                
-    except Exception as e:
-        logger.error(f"Error monitoring output: {e}")
-
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def stop_command(update: Update, context: CallbackContext):
     """Stop user's running script"""
     user_id = update.effective_user.id
     
@@ -130,7 +135,7 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             process.terminate()
-            await asyncio.wait_for(process.wait(), timeout=5)
+            process.wait(timeout=5)
         except:
             try:
                 process.kill()
@@ -138,14 +143,14 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         
         del running_processes[user_id]
-        await update.message.reply_text(f"✅ Stopped script: `{process_info['filename']}`", parse_mode="Markdown")
+        update.message.reply_text(f"✅ Stopped: `{process_info['filename']}`", parse_mode="Markdown")
     else:
-        await update.message.reply_text("❌ No script is currently running.")
+        update.message.reply_text("❌ No script running.")
 
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def list_command(update: Update, context: CallbackContext):
     """List all running scripts"""
     if not running_processes:
-        await update.message.reply_text("📭 No scripts are currently running.")
+        update.message.reply_text("📭 No scripts running.")
         return
     
     message = "📋 *Running Scripts:*\n\n"
@@ -154,21 +159,25 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_time = info['start_time'].strftime("%H:%M:%S")
         message += f"• `{filename}` (Started: {start_time})\n"
     
-    await update.message.reply_text(message, parse_mode="Markdown")
+    update.message.reply_text(message, parse_mode="Markdown")
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def status_command(update: Update, context: CallbackContext):
     """Show bot status"""
     total_scripts = len(running_processes)
     status = f"""
 📊 *Bot Status*
 • Running scripts: {total_scripts}
 • Bot: Online ✅
-• All scripts will stop when bot restarts
+• All scripts stop when bot restarts
     """
-    await update.message.reply_text(status, parse_mode="Markdown")
+    update.message.reply_text(status, parse_mode="Markdown")
 
-async def cleanup():
-    """Cleanup all running processes when bot stops"""
+def error_handler(update: Update, context: CallbackContext):
+    """Log errors"""
+    logger.warning(f'Update {update} caused error {context.error}')
+
+def cleanup():
+    """Cleanup on shutdown"""
     for user_id, info in running_processes.items():
         try:
             info['process'].terminate()
@@ -177,28 +186,30 @@ async def cleanup():
 
 def main():
     """Start the bot"""
-    # Create application
-    application = Application.builder().token(BOT_TOKEN).build()
+    # Create updater
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
     
     # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stop", stop_command))
-    application.add_handler(CommandHandler("list", list_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(MessageHandler(filters.Document.FileExtension("py"), handle_python_file))
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("stop", stop_command))
+    dp.add_handler(CommandHandler("list", list_command))
+    dp.add_handler(CommandHandler("status", status_command))
+    dp.add_handler(MessageHandler(Filters.document.file_extension("py"), handle_python_file))
+    dp.add_error_handler(error_handler)
     
-    # Add cleanup on shutdown
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-    
-    # Cleanup when polling stops
-    asyncio.run(cleanup())
-
-if __name__ == '__main__':
     # Create scripts directory
     Path("scripts").mkdir(exist_ok=True)
     
     print("Starting Python Hosting Bot...")
     print("Send .py files to run them!")
-    print("Bot will run until terminated with Ctrl+C")
     
+    # Start bot
+    updater.start_polling()
+    updater.idle()
+    
+    # Cleanup when bot stops
+    cleanup()
+
+if __name__ == '__main__':
     main()
