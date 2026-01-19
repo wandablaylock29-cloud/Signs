@@ -269,11 +269,21 @@ def create_session_with_retries() -> requests.Session:
 def parse_proxy(proxy_str: str) -> Optional[Dict[str, str]]:
     """Parse proxy string into components"""
     try:
+        # Remove any whitespace
+        proxy_str = proxy_str.strip()
+        
+        # Split by colon
         parts = proxy_str.split(':')
         if len(parts) != 4:
             return None
         
         host, port, username, password = parts
+        
+        # Validate port is numeric
+        if not port.isdigit():
+            return None
+        
+        # Build proxy URL in correct format
         proxy_url = f"http://{username}:{password}@{host}:{port}"
         
         return {
@@ -311,6 +321,10 @@ def is_valid_response(response_text: str) -> bool:
     if not response_text or not isinstance(response_text, str):
         return False
     
+    # Check for empty response
+    if response_text.strip() == "":
+        return False
+    
     invalid_responses = [
         "error",
         "proxy error",
@@ -318,7 +332,9 @@ def is_valid_response(response_text: str) -> bool:
         "connection failed",
         "invalid",
         "bad gateway",
-        "gateway timeout"
+        "gateway timeout",
+        "connection refused",
+        "cannot connect"
     ]
     
     response_lower = response_text.lower()
@@ -330,8 +346,11 @@ def is_valid_response(response_text: str) -> bool:
 
 def process_response(api_response: str, price: float = 0.00) -> Tuple[str, str, str]:
     """Process API response and determine status"""
+    if not api_response or not isinstance(api_response, str):
+        return "NO RESPONSE", "ERROR", "$0.00"
+    
     if not is_valid_response(api_response):
-        return "API ERROR", "DECLINED", f"${price:.2f}"
+        return "INVALID RESPONSE", "ERROR", "$0.00"
     
     response_upper = api_response.upper()
     
@@ -358,6 +377,9 @@ def process_response(api_response: str, price: float = 0.00) -> Tuple[str, str, 
     elif 'API_ERROR_' in response_upper:
         return 'API ERROR', 'DECLINED', f"${price:.2f}"
     else:
+        # If we get here but response is valid, check for success indicators
+        if any(x in response_upper for x in ['SUCCESS', 'APPROVED', 'APPROVE', 'OK']):
+            return api_response, 'APPROVED', f"${price:.2f}"
         return api_response, 'DECLINED', f"${price:.2f}"
 
 def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool, str, float]:
@@ -392,14 +414,30 @@ def test_proxy_with_api(proxy_dict: Dict[str, str], site_url: str) -> Tuple[bool
         response_time = time.time() - start_time
         response_text = response.text.strip() if response.status_code == 200 else f"HTTP {response.status_code}"
         
-        return is_valid_response(response_text), response_text, response_time
+        # Check if we got a valid response
+        if response.status_code == 200 and is_valid_response(response_text):
+            return True, response_text, response_time
+        else:
+            return False, response_text, response_time
         
+    except requests.exceptions.ProxyError as e:
+        logger.error(f"Proxy error: {e}")
+        return False, f"Proxy Error: {str(e)}", 0.0
+    except requests.exceptions.ConnectTimeout as e:
+        logger.error(f"Connection timeout: {e}")
+        return False, f"Connection Timeout: {str(e)}", 0.0
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"Connection error: {e}")
+        return False, f"Connection Error: {str(e)}", 0.0
+    except requests.exceptions.Timeout as e:
+        logger.error(f"Request timeout: {e}")
+        return False, f"Request Timeout: {str(e)}", 0.0
     except requests.exceptions.RequestException as e:
-        logger.error(f"Proxy test error: {e}")
-        return False, str(e), 0.0
+        logger.error(f"Request exception: {e}")
+        return False, f"Request Exception: {str(e)}", 0.0
     except Exception as e:
         logger.error(f"Unexpected error in proxy test: {e}")
-        return False, str(e), 0.0
+        return False, f"Unexpected Error: {str(e)}", 0.0
 
 def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, Any]:
     """Main check function with proxy"""
@@ -418,10 +456,12 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
         api_url = f"{API_BASE_URL}?cc={cc}&site={site_url}"
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         }
         
         proxy_config = {
@@ -437,7 +477,8 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
             headers=headers,
             proxies=proxy_config,
             timeout=REQUEST_TIMEOUT,
-            verify=False
+            verify=False,
+            allow_redirects=True
         )
         
         response_time = time.time() - start_time
@@ -446,32 +487,50 @@ def check_site(site_url: str, cc: str, proxy_dict: Dict[str, str]) -> Dict[str, 
             response_text = response.text.strip()
             result["response"] = response_text
             result["response_time"] = response_time
+            
+            # Mark proxy as working if we got any response
             result["proxy_status"] = "✅"
             
-            # Extract price from site URL (placeholder logic)
-            price_match = re.search(r'\$(\d+\.?\d*)', site_url)
+            # Extract price from site URL (simple pattern)
+            price_match = re.search(r'[\$£€](\d+\.?\d*)', site_url)
             if price_match:
-                result["price"] = float(price_match.group(1))
+                try:
+                    result["price"] = float(price_match.group(1))
+                except:
+                    result["price"] = 0.00
             
             # Process response
             processed_response, status, gateway = process_response(response_text, result["price"])
-            result["response"] = processed_response
+            result["response"] = processed_response[:100]  # Limit response length
             result["status"] = status
-            result["gateway"] = gateway
+            result["gateway"] = gateway if gateway else "Unknown"
             result["success"] = True
+            
+            # If status is not ERROR, mark as success
+            if status != "ERROR":
+                result["success"] = True
         else:
             result["error"] = f"HTTP {response.status_code}"
+            result["response"] = f"HTTP {response.status_code}"
             
     except requests.exceptions.ProxyError as e:
         result["error"] = f"Proxy Error: {str(e)}"
+        result["response"] = "Proxy Error"
     except requests.exceptions.ConnectTimeout as e:
         result["error"] = f"Connection Timeout: {str(e)}"
+        result["response"] = "Timeout"
     except requests.exceptions.ConnectionError as e:
         result["error"] = f"Connection Error: {str(e)}"
+        result["response"] = "Connection Failed"
+    except requests.exceptions.Timeout as e:
+        result["error"] = f"Request Timeout: {str(e)}"
+        result["response"] = "Timeout"
     except requests.exceptions.RequestException as e:
         result["error"] = f"Request Error: {str(e)}"
+        result["response"] = "Request Failed"
     except Exception as e:
         result["error"] = f"Unexpected Error: {str(e)}"
+        result["response"] = "System Error"
     
     return result
 
@@ -487,7 +546,11 @@ def format_message(cc: str, result: Dict[str, Any], bin_info: Dict[str, str],
     else:
         display_cc = card_number
     
-    formatted_cc = f"{display_cc}|{parts[1]}|{parts[2][-2:]}|{parts[3]}" if len(parts) == 4 else cc
+    # Format CC for display
+    if len(parts) == 4:
+        formatted_cc = f"{display_cc}|{parts[1]}|{parts[2][-2:] if len(parts[2]) >= 2 else parts[2]}|{parts[3]}"
+    else:
+        formatted_cc = cc
     
     current_time = datetime.datetime.now().strftime("%H:%M:%S")
     proxy_parts = proxy_str.split(':')
@@ -496,16 +559,22 @@ def format_message(cc: str, result: Dict[str, Any], bin_info: Dict[str, str],
     emoji = status_emoji.get(result["status"], "⚠️")
     status_display = status_text.get(result["status"], result["status"])
     
-    country_flag = f"🇺🇸"  # Default flag
+    # Get country flag
+    country_flag = ""
     if bin_info["country_code"]:
         try:
-            # Convert country code to regional indicator symbols
+            # Convert country code to regional indicator symbols for flag
             code = bin_info["country_code"].upper()
             if len(code) == 2:
-                flag = ''.join(chr(127397 + ord(c)) for c in code)
-                country_flag = flag
+                # Create flag emoji from country code
+                flag_emoji = ''.join(chr(127397 + ord(c)) for c in code)
+                country_flag = f" {flag_emoji}"
         except:
             pass
+    
+    # If no flag could be generated, use generic flag
+    if not country_flag and bin_info["country"]:
+        country_flag = " 🇺🇸"  # Default to US flag
     
     message = f"""
 ┌─────────────────
@@ -514,10 +583,10 @@ def format_message(cc: str, result: Dict[str, Any], bin_info: Dict[str, str],
 
 💳 <b>Card:</b> <code>{formatted_cc}</code>
 ⚡ <b>Gateway:</b> {result.get('gateway', 'Unknown')}
-📝 <b>Response:</b> <code>{result.get('response', '')[:50]}</code>
+📝 <b>Response:</b> <code>{result.get('response', 'No response')}</code>
 ─────────────────
 🏦 <b>Issuer:</b> {bin_info.get('bank', 'Unknown')}
-🌍 <b>Country:</b> {bin_info.get('country', 'Unknown')} {country_flag}
+🌍 <b>Country:</b> {bin_info.get('country', 'Unknown')}{country_flag}
 🔢 <b>Type:</b> {bin_info.get('brand', 'Unknown')} ({bin_info.get('type', 'Unknown')})
 ─────────────────
 👤 <b>User:</b> {user_name}
@@ -757,7 +826,7 @@ async def addproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ <b>Proxy Test Failed!</b>\n\n"
             f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
-            f"<b>Error:</b> Proxy failed API test\n\n"
+            f"<b>Error:</b> {response_text}\n\n"
             "Check your proxy credentials and server.\n"
             "Make sure proxy is working with the checkout API.",
             parse_mode=ParseMode.HTML
@@ -833,7 +902,7 @@ async def testproxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ <b>Proxy Test Failed!</b>\n\n"
             f"<b>Proxy:</b> {proxy_dict['host']}:{proxy_dict['port']}\n"
-            f"<b>Error:</b> Proxy failed API test\n\n"
+            f"<b>Error:</b> {response_text}\n\n"
             "Proxy cannot connect to the checkout API.\n"
             "Check credentials and proxy server status.",
             parse_mode=ParseMode.HTML
@@ -962,7 +1031,7 @@ async def testsite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         emoji = "❌"
         status_display = "FAILED"
-        processed_response = response_text
+        processed_response = response_text[:100] if response_text else "No response"
         gateway = "Unknown"
     
     await test_msg.delete()
@@ -978,7 +1047,7 @@ async def testsite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>⏱️ Response Time:</b> {response_time:.2f}s
 
 <b>📊 Status:</b> {emoji} {status_display}
-<b>📝 Response:</b> {processed_response[:100]}
+<b>📝 Response:</b> {processed_response}
 <b>⚡ Gateway:</b> {gateway}
 <b>💰 Price:</b> $0.00
 """
