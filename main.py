@@ -15,7 +15,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8036843497:AAFscbpINVEMGt5GaOHnJ0deVcCASGqZe98"
+BOT_TOKEN = "7897881067:AAFP06nsxxdAJgMnr0KnA6RYGdPjkEQJhYk"
 
 # Store running processes: user_id -> info
 running_processes: dict[int, dict] = {}
