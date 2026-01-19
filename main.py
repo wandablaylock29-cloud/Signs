@@ -37,7 +37,7 @@ from telegram.constants import ParseMode
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = "8504531890:AAH6q920rSX3xmk1YqgegAjlBm2syr7TiVE"
+BOT_TOKEN = "8504531890:AAEn6cnVTMZAOQyjkQ9uilaXsW2-jUaFTeQ"
 OWNER_ID = 6821529235
 API_BASE_URL = "http://140.99.254.73:3000/checkout"
 
@@ -688,10 +688,7 @@ Reply to a message with CC
 
 <b>🔧 Site Management:</b>
 /addsite URL - Add single site
-/maddsites URL1 URL2 ... - Add multiple sites
 /listsites - List all sites
-/clearsites - Clear all sites
-/testsite URL - Test a site
 
 <b>📊 Stats:</b>
 /stats - Bot statistics
@@ -1203,10 +1200,7 @@ def main():
     application.add_handler(CommandHandler("clearproxies", clearproxies_command))
     application.add_handler(CommandHandler("testproxy", testproxy_command))
     application.add_handler(CommandHandler("addsite", addsite_command))
-    application.add_handler(CommandHandler("maddsites", maddsites_command))
     application.add_handler(CommandHandler("listsites", listsites_command))
-    application.add_handler(CommandHandler("clearsites", clearsites_command))
-    application.add_handler(CommandHandler("testsite", testsite_command))
     application.add_handler(CommandHandler("stats", stats_command))
     
     application.add_handler(MessageHandler(filters.Document.FileExtension("txt"), handle_document))
