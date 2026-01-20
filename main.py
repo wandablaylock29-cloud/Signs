@@ -37,9 +37,9 @@ from telegram.constants import ParseMode
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = "8504531890:AAFkna_tLNPGuTdH772_rGUxiWqfbCbjYL4"
+BOT_TOKEN = "8504531890:AAFb8aq6l9oHj-pcT9gSG9Yi5dSx8-wyFO4"
 OWNER_ID = 6821529235
-API_BASE_URL = "https://signs2-2-3lg1.onrender.com/autog"
+API_BASE_URL = "https://sigma-1-qtqp.onrender.com/autog"
 
 # Bot settings
 MAX_PROXIES = 20
